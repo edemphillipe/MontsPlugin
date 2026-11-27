@@ -24,6 +24,7 @@ target_sources(gsp_core INTERFACE
     ${CMAKE_CURRENT_SOURCE_DIR}/effects/Drives.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/effects/Modulation.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/effects/Delay.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/effects/DualDelay.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/effects/Reverb.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/amp/AmpSim.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/amp/CabinetSim.cpp)

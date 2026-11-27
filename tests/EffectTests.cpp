@@ -4,6 +4,7 @@
 #include "TestUtil.h"
 
 #include "effects/Delay.h"
+#include "effects/DualDelay.h"
 #include "effects/Drives.h"
 #include "effects/Modulation.h"
 #include "effects/Reverb.h"
@@ -490,6 +491,106 @@ void testOrderAndPresets()
     CHECK (c.getOrder().front() == reverb, "reverb not first");
     CHECK (energyAtAmp > 0.0f, "AMP block did not receive the reverb output");
     std::printf ("  order, enabled state, parameters and BPM survive save/load\n");
+
+    // a board saved before the dual delay existed keeps its order; the new pedal goes after ECHOES
+    {
+        gsp::Pedalboard old;
+        auto v = juce::JSON::parse (json);
+        juce::Array<juce::var> kept;
+        for (const auto& item : *v["order"].getArray())
+            if (item.toString() != "dualdelay")
+                kept.add (item);
+        v.getDynamicObject()->setProperty ("order", kept);
+        old.fromVar (v);
+        const auto order = old.getOrder();
+        const auto delayPos = std::find (order.begin(), order.end(), old.indexOfType ("delay"));
+        CHECK (order.front() == reverb, "old saved order was discarded");
+        CHECK (delayPos + 1 != order.end() && *(delayPos + 1) == old.indexOfType ("dualdelay"), "new pedal not placed after ECHOES");
+        std::printf ("  order saved by an older version is kept; the dual delay is added after ECHOES\n");
+    }
+}
+
+void testDualDelay()
+{
+    auto d = make<gsp::fx::DualDelay>();
+    d->enabled = true;
+    for (const char* id : { "feedbackL", "feedbackR", "mod" }) d->set (id, 0.0f);
+    for (const char* id : { "levelL", "levelR", "toneL", "toneR" }) d->set (id, 1.0f);
+    d->set ("voiceL", (float) gsp::fx::DualDelay::Digital);
+    d->set ("voiceR", (float) gsp::fx::DualDelay::Digital);
+    d->set ("timeL", 300.0f);
+    d->set ("timeR", 450.0f);
+    d->reset();
+
+    auto out = run (*d, impulse ((int) fs));
+    const size_t hitL = argmaxAbs (out.l, 100, out.l.size()), hitR = argmaxAbs (out.r, 100, out.r.size());
+    std::printf ("  free: L echo at %zu (expected %d), R echo at %zu (expected %d)\n", hitL, (int) (0.3 * fs), hitR, (int) (0.45 * fs));
+    CHECK (std::abs ((long) hitL - (long) (0.3 * fs)) <= 3, "L echo at %zu", hitL);
+    CHECK (std::abs ((long) hitR - (long) (0.45 * fs)) <= 3, "R echo at %zu", hitR);
+
+    // TAP sync: 120 BPM, L = 1/4 (0.5 s), R = 1/8 dotted (0.375 s)
+    gsp::fx::TempoClock clock;
+    clock.bpm = 120.0;
+    d->setTempoClock (&clock);
+    d->set ("sync", 1.0f);
+    d->set ("divisionL", (float) gsp::fx::Subdivision::Quarter);
+    d->set ("divisionR", (float) gsp::fx::Subdivision::DottedEighth);
+    d->reset();
+    out = run (*d, impulse ((int) fs));
+    const size_t sL = argmaxAbs (out.l, 100, out.l.size()), sR = argmaxAbs (out.r, 100, out.r.size());
+    std::printf ("  TAP 120 BPM: L 1/4 at %zu (expected %d), R 1/8 pontuada at %zu (expected %d)\n", sL, (int) (0.5 * fs), sR, (int) (0.375 * fs));
+    CHECK (std::abs ((long) sL - (long) (0.5 * fs)) <= 3, "synced L at %zu", sL);
+    CHECK (std::abs ((long) sR - (long) (0.375 * fs)) <= 3, "synced R at %zu", sR);
+    d->set ("sync", 0.0f);
+
+    // sides are independent: an impulse only on L never reaches R with CROSS at 0
+    auto onlyLeft = [&] (float cross)
+    {
+        d->set ("feedbackL", 0.6f); d->set ("feedbackR", 0.6f); d->set ("cross", cross);
+        d->reset();
+        Stereo s { impulse ((int) fs * 2), std::vector<float> ((size_t) fs * 2, 0.0f) };
+        for (size_t i = 0; i < s.l.size(); i += block)
+            d->process (s.l.data() + i, s.r.data() + i, (int) std::min ((size_t) block, s.l.size() - i));
+        return peak (s.r);
+    };
+    const float leak = onlyLeft (0.0f), crossed = onlyLeft (1.0f);
+    std::printf ("  impulse on L only: R peak %.4f with CROSS 0, %.3f with CROSS 1\n", leak, crossed);
+    CHECK (leak < 1e-6f, "L leaks into R with CROSS 0 (%.6f)", leak);
+    CHECK (crossed > 0.1f, "CROSS does not send repeats to R (%.4f)", crossed);
+
+    // each side has its own colour: TONE L bright vs TONE R dark on the same echo
+    d->set ("cross", 0.0f); d->set ("feedbackL", 0.0f); d->set ("feedbackR", 0.0f);
+    d->set ("timeL", 300.0f); d->set ("timeR", 300.0f);
+    d->set ("toneL", 1.0f); d->set ("toneR", 0.0f);
+    d->reset();
+    out = run (*d, impulse ((int) fs));
+    auto hf = [] (const std::vector<float>& v)
+    {
+        double e = 0;
+        for (size_t i = 14000; i < 15500; ++i) { const double dlt = v[i] - v[i - 1]; e += dlt * dlt; }
+        return e;
+    };
+    const double ratio = 10.0 * std::log10 (hf (out.l) / std::max (hf (out.r), 1e-30));
+    std::printf ("  TONE L 1 vs TONE R 0: L echo has %.1f dB more high end\n", ratio);
+    CHECK (ratio > 6.0, "tone per side has no effect (%.1f dB)", ratio);
+
+    // stability: max repeats, full cross, every voice combination
+    for (int vl = 0; vl < 3; ++vl)
+        for (int vr = 0; vr < 3; ++vr)
+        {
+            d->set ("voiceL", (float) vl); d->set ("voiceR", (float) vr);
+            d->set ("feedbackL", 1.0f); d->set ("feedbackR", 1.0f); d->set ("cross", 0.5f); d->set ("mod", 1.0f);
+            d->set ("timeL", 120.0f); d->set ("timeR", 170.0f);
+            d->reset();
+            Stereo s { sine ((int) fs * 4, 330.0, 0.5f), sine ((int) fs * 4, 330.0, 0.5f) };
+            for (size_t i = 0; i < s.l.size(); i += block)
+                d->process (s.l.data() + i, s.r.data() + i, (int) std::min ((size_t) block, s.l.size() - i));
+            bool finite = true;
+            for (size_t i = 0; i < s.l.size(); ++i) finite = finite && std::isfinite (s.l[i]) && std::isfinite (s.r[i]);
+            CHECK (finite, "NaN with voices %d/%d", vl, vr);
+            CHECK (peak (s.l) < 8.0f && peak (s.r) < 8.0f, "runaway with voices %d/%d: %.1f", vl, vr, std::max (peak (s.l), peak (s.r)));
+        }
+    std::printf ("  max repeats + cross, all 9 voice combinations: stable\n");
 }
 
 void testCpuBudget()
@@ -507,7 +608,7 @@ void testCpuBudget()
         board.process (in.data() + s, r.data() + s, small, [] (float*, float*, int) {});
     const double secs = std::chrono::duration<double> (std::chrono::steady_clock::now() - start).count();
     const double load = secs / 5.0 * 100.0;
-    std::printf ("  all 11 pedals on (shimmer + tape), 64-sample buffer: %.1f%% of one CPU core\n", load);
+    std::printf ("  all %d pedals on (shimmer + tape), 64-sample buffer: %.1f%% of one CPU core\n", board.size(), load);
     CHECK (load < 50.0, "too slow: %.1f%%", load);
 }
 } // namespace
@@ -518,6 +619,7 @@ void runEffectTests()
     runTest ("Pedals: bypass is transparent", testBypassIsTransparent);
     runTest ("Pedals: on/off switching without clicks", testSwitchingIsClickFree);
     runTest ("Delay: time and TAP sync", testDelayTiming);
+    runTest ("Dual delay: independent L/R time, tone, cross, stability", testDualDelay);
     runTest ("Delay: ping pong alternates sides", testPingPong);
     runTest ("Delay: reverse", testReverseDelay);
     runTest ("Reverb: decay time and stereo", testReverbDecay);
