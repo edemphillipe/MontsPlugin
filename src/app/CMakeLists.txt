@@ -11,7 +11,8 @@ juce_add_gui_app(GuitarStudioPro
 target_sources(GuitarStudioPro PRIVATE
     Main.cpp
     MainComponent.cpp
-    CaptureBrowser.cpp)
+    CaptureBrowser.cpp
+    PedalboardView.cpp)
 
 target_compile_definitions(GuitarStudioPro PRIVATE
     JUCE_APPLICATION_NAME_STRING="$<TARGET_PROPERTY:GuitarStudioPro,JUCE_PRODUCT_NAME>"
