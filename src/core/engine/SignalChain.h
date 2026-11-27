@@ -18,6 +18,7 @@
 #include "dsp/NoiseGate.h"
 #include "engine/CaptureSlot.h"
 #include "engine/Pedalboard.h"
+#include "tuner/PitchDetector.h"
 
 #include <juce_dsp/juce_dsp.h>
 
@@ -79,6 +80,11 @@ public:
 
     Pedalboard& getPedalboard() noexcept { return pedalboard; }
 
+    // tuner: the input (after input gain, before the gate) is copied here for the UI
+    TunerTap& getTunerTap() noexcept { return tunerTap; }
+    double getSampleRate() const noexcept { return sampleRate; }
+    std::atomic<bool> muteOutput { false }; // silent output while tuning (fades like the output gain)
+
 private:
     void updateEq() noexcept;
     void processAmp (float* mono, int numSamples) noexcept;
@@ -119,6 +125,7 @@ private:
 
     juce::HeapBlock<float> work, workR;
     Pedalboard pedalboard;
+    TunerTap tunerTap;
     NoiseGate gate;
 
     // capture handover

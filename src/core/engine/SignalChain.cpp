@@ -101,6 +101,8 @@ void SignalChain::process (const float* monoIn, float* const* outputs, int numOu
             inputPeak.store (peak, std::memory_order_relaxed);
     }
 
+    tunerTap.push (x, numSamples);
+
     // ---- noise gate
     gate.setEnabled (gateEnabled.load (std::memory_order_relaxed));
     gate.setThresholdDb (gateThresholdDb.load (std::memory_order_relaxed));
@@ -119,7 +121,8 @@ void SignalChain::process (const float* monoIn, float* const* outputs, int numOu
     });
 
     // ---- output gain + meter
-    outGain.setTargetValue (juce::Decibels::decibelsToGain (outputGainDb.load (std::memory_order_relaxed)));
+    outGain.setTargetValue (muteOutput.load (std::memory_order_relaxed) ? 0.0f
+                                                                     : juce::Decibels::decibelsToGain (outputGainDb.load (std::memory_order_relaxed)));
     for (int i = 0; i < numSamples; ++i)
     {
         const float g = outGain.getNextValue();

@@ -245,6 +245,7 @@ void testSignalChainSwap()
 
 void runEffectTests(); // EffectTests.cpp
 void runAmpTests();    // AmpTests.cpp
+void runStudioTests(); // StudioTests.cpp
 
 int main()
 {
@@ -257,6 +258,7 @@ int main()
     runTest ("Signal chain: resampling, capture swap, clear", testSignalChainSwap);
     runEffectTests();
     runAmpTests();
+    runStudioTests();
 
     std::printf ("\n%d checks, %d failures, %d skipped\n", checks, failures, skipped);
     return failures == 0 ? 0 : 1;

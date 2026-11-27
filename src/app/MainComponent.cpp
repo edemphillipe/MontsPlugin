@@ -49,6 +49,33 @@ MainComponent::MainComponent (juce::PropertiesFile& s) : settings (s)
     addAndMakeVisible (bpmLabel);
     setWantsKeyboardFocus (true);
 
+    // presets (whole board)
+    presetSelect.setTextWhenNothingSelected ("Pedaleira: (sem nome)");
+    presetSelect.setTooltip (utf8 ("Pedaleiras salvas: amp, gabinete, pedais e ordem"));
+    presetSelect.onChange = [this]
+    {
+        const auto name = presetSelect.getText();
+        const auto state = presets.load (name);
+        if (state.isObject())
+        {
+            applyBoardState (state);
+            settings.setValue ("preset", name);
+            saveState();
+        }
+    };
+    addAndMakeVisible (presetSelect);
+    savePresetButton.setTooltip (utf8 ("Salvar a pedaleira atual com um nome"));
+    savePresetButton.onClick = [this] { savePresetAs(); };
+    addAndMakeVisible (savePresetButton);
+    deletePresetButton.setTooltip ("Excluir a pedaleira selecionada");
+    deletePresetButton.onClick = [this] { deleteCurrentPreset(); };
+    addAndMakeVisible (deletePresetButton);
+
+    // tuner
+    tuner.onActiveChanged = [this] (bool on) { chain.muteOutput = on; };
+    addAndMakeVisible (tuner);
+    tunerBuffer.assign (4096, 0.0f);
+
     // ---------------- pedalboard
     addAndMakeVisible (pedalboardView);
     pedalboardView.onChanged = [this] { saveState(); };
@@ -109,7 +136,7 @@ MainComponent::MainComponent (juce::PropertiesFile& s) : settings (s)
     capturePanel.addChildComponent (voicingSelect);
     voicingInfo.setColour (juce::Label::textColourId, colours::textDim);
     voicingInfo.setFont (juce::FontOptions (13.0f));
-    capturePanel.addChildComponent (voicingInfo);
+    capturePanel.addAndMakeVisible (voicingInfo);
     auto bindAmpKnob = [this] (Knob& k, std::atomic<float>& target)
     {
         capturePanel.addChildComponent (k);
@@ -184,6 +211,35 @@ MainComponent::MainComponent (juce::PropertiesFile& s) : settings (s)
     outputPanel.addAndMakeVisible (outputMeter);
     outputGain.slider.onValueChange = [this] { chain.outputGainDb = (float) outputGain.slider.getValue(); };
 
+    // ---------------- realistic looks
+    capturePanel.setLook (ModulePanel::Look::AmpHead);
+    cabPanel.setLook (ModulePanel::Look::Cabinet);
+    const auto ampInk = juce::Colour (0xff2b2010);
+    for (auto* k : { &ampGain, &ampVolume, &ampBass, &ampMiddle, &ampTreble, &ampPresence, &ampMaster, &aidaKnob1, &aidaKnob2 })
+    {
+        k->setPanelStyle (&chickenLook, ampInk);
+        k->label.setFont (juce::FontOptions (11.0f, juce::Font::bold));
+    }
+    for (auto* k : { &inputGain, &gateThreshold, &bass, &middle, &treble, &outputGain })
+        k->setPanelStyle (&pedalKnobLook, colours::text, "silver");
+    for (auto* k : { &micPosition, &micDistance })
+        k->setPanelStyle (&pedalKnobLook, juce::Colour (0xffefe3c0), "black");
+    for (auto* l : { &captureName, &captureInfo })
+        l->setColour (juce::Label::textColourId, ampInk);
+    normalise.setColour (juce::ToggleButton::textColourId, ampInk);
+    normalise.setColour (juce::ToggleButton::tickDisabledColourId, ampInk);
+    voicingInfo.setColour (juce::Label::textColourId, juce::Colour (0xffd8c9a8));
+    irName.setColour (juce::Label::textColourId, juce::Colour (0xffefe3c0));
+    for (auto* b : { &ampSourceSelect, &voicingSelect, &cabModeSelect, &cabTypeSelect, &micSelect })
+    {
+        b->setColour (juce::ComboBox::backgroundColourId, juce::Colour (0xcc15110e));
+        b->setColour (juce::ComboBox::outlineColourId, juce::Colour (0xff5a4a3a));
+        b->setColour (juce::ComboBox::textColourId, juce::Colour (0xffefe3c0));
+    }
+    appTitle.setFont (juce::FontOptions (21.0f, juce::Font::bold));
+    deviceLabel.setFont (juce::FontOptions (10.5f));
+    deviceLabel.setJustificationType (juce::Justification::centredLeft);
+
     // ---------------- library
     addAndMakeVisible (browser);
     browser.onLoad = [this] (const juce::File& f) { loadCapture (f); };
@@ -202,7 +258,7 @@ MainComponent::MainComponent (juce::PropertiesFile& s) : settings (s)
     refreshInputChoices();
     updateDeviceLabel();
 
-    setSize (1400, 960);
+    setSize (1400, 990);
     startTimerHz (30);
 }
 
@@ -252,6 +308,13 @@ void MainComponent::timerCallback()
     const double beat = 60.0 / chain.getPedalboard().tempo().bpm.load();
     const bool lit = std::fmod (juce::Time::getMillisecondCounterHiRes() * 0.001, beat) < 0.08;
     tapButton.setColour (juce::TextButton::buttonColourId, lit ? colours::accent : colours::accent.darker (0.5f));
+
+    if (tuner.isActive() && --tunerCountdown <= 0)
+    {
+        tunerCountdown = 3; // ~10 analyses per second
+        chain.getTunerTap().latest (tunerBuffer.data(), (int) tunerBuffer.size());
+        tuner.setResult (pitchDetector.detect (tunerBuffer.data(), (int) tunerBuffer.size(), chain.getSampleRate()));
+    }
 
     const auto levels = chain.readAndResetLevels();
     inputMeter.setPeak (levels.inputPeak);
@@ -319,81 +382,105 @@ void MainComponent::resized()
 {
     auto r = getLocalBounds().reduced (14);
 
-    auto header = r.removeFromTop (36);
-    appTitle.setBounds (header.removeFromLeft (280));
-    audioButton.setBounds (header.removeFromRight (150).reduced (0, 4));
+    auto header = r.removeFromTop (44);
+    {
+        auto titleArea = header.removeFromLeft (330);
+        appTitle.setBounds (titleArea.removeFromTop (26));
+        deviceLabel.setBounds (titleArea);
+    }
+    header.removeFromLeft (8);
+    presetSelect.setBounds (header.removeFromLeft (230).reduced (0, 7));
+    header.removeFromLeft (6);
+    savePresetButton.setBounds (header.removeFromLeft (70).reduced (0, 7));
+    header.removeFromLeft (4);
+    deletePresetButton.setBounds (header.removeFromLeft (70).reduced (0, 7));
+    audioButton.setBounds (header.removeFromRight (140).reduced (0, 7));
     header.removeFromRight (8);
-    bpmLabel.setBounds (header.removeFromRight (90).reduced (0, 4));
-    tapButton.setBounds (header.removeFromRight (60).reduced (0, 4));
+    inputSelect.setBounds (header.removeFromRight (150).reduced (0, 7));
     header.removeFromRight (8);
-    inputSelect.setBounds (header.removeFromRight (150).reduced (0, 4));
-    header.removeFromRight (8);
-    deviceLabel.setBounds (header);
+    bpmLabel.setBounds (header.removeFromRight (84).reduced (0, 7));
+    tapButton.setBounds (header.removeFromRight (56).reduced (0, 7));
+    header.removeFromRight (10);
+    tuner.setBounds (header.removeFromRight (juce::jmin (240, header.getWidth())).reduced (0, 4));
 
-    r.removeFromTop (12);
-    auto chainRow = r.removeFromTop (220);
-    const int gap = 14;
+    r.removeFromTop (10);
+    auto chainRow = r.removeFromTop (240);
+    const int gap = 10;
     auto take = [&] (int w) { auto b = chainRow.removeFromLeft (w); chainRow.removeFromLeft (gap); return b; };
 
-    inputPanel.setBounds (take (110));
-    gatePanel.setBounds (take (124));
-    outputPanel.setBounds (chainRow.removeFromRight (110));
+    inputPanel.setBounds (take (104));
+    gatePanel.setBounds (take (110));
+    outputPanel.setBounds (chainRow.removeFromRight (104));
     chainRow.removeFromRight (gap);
-    eqPanel.setBounds (chainRow.removeFromRight (200));
+    eqPanel.setBounds (chainRow.removeFromRight (190));
     chainRow.removeFromRight (gap);
     cabPanel.setBounds (chainRow.removeFromRight (250));
     chainRow.removeFromRight (gap);
     capturePanel.setBounds (chainRow);
 
-    // panel contents
+    // rack units
     {
         auto b = inputPanel.getLocalBounds().reduced (10).withTrimmedTop (24);
-        inputMeter.setBounds (b.removeFromRight (14));
-        inputGain.setBounds (b.withSizeKeepingCentre (b.getWidth(), 110));
+        inputMeter.setBounds (b.removeFromRight (12).reduced (0, 6));
+        inputGain.setBounds (b.withSizeKeepingCentre (b.getWidth(), 112));
     }
     {
         auto b = gatePanel.getLocalBounds().reduced (10).withTrimmedTop (24);
-        gateThreshold.setBounds (b.withSizeKeepingCentre (b.getWidth(), 110));
+        gateThreshold.setBounds (b.withSizeKeepingCentre (b.getWidth(), 112));
     }
     {
-        auto b = capturePanel.getLocalBounds().reduced (12).withTrimmedTop (24);
-        auto sourceRow = b.removeFromTop (26);
-        ampSourceSelect.setBounds (sourceRow.removeFromLeft (210));
-        sourceRow.removeFromLeft (8);
-        voicingSelect.setBounds (sourceRow.removeFromLeft (220));
+        auto b = eqPanel.getLocalBounds().reduced (10).withTrimmedTop (24);
+        PanelLayout::row (b.withSizeKeepingCentre (b.getWidth(), 112), { &bass, &middle, &treble });
+    }
+    {
+        auto b = outputPanel.getLocalBounds().reduced (10).withTrimmedTop (24);
+        outputMeter.setBounds (b.removeFromRight (12).reduced (0, 6));
+        outputGain.setBounds (b.withSizeKeepingCentre (b.getWidth(), 112));
+    }
+
+    // amp head: selectors on the grill, controls on the gold panel
+    {
+        auto grill = capturePanel.getLocalBounds().reduced (24, 14).withTrimmedTop (18);
+        grill = grill.removeFromTop ((int) (capturePanel.getHeight() * 0.40f) - 30);
+        auto left = grill.removeFromLeft ((int) (grill.getWidth() * 0.42f));
+        ampSourceSelect.setBounds (left.removeFromTop (24));
+        left.removeFromTop (4);
+        voicingSelect.setBounds (left.removeFromTop (24));
+        voicingInfo.setBounds (grill.withTrimmedTop (grill.getHeight() - 18).translated (0, 4));
+
+        auto panel = capturePanel.controlPanelArea().reduced (6, 4);
+        panel.removeFromLeft (42); // pilot light
         {
-            auto knobs = b;
-            voicingInfo.setBounds (knobs.removeFromTop (20));
-            knobs = knobs.withSizeKeepingCentre (knobs.getWidth(), juce::jmin (knobs.getHeight(), 112));
+            auto knobs = panel;
             const int w = knobs.getWidth() / 7;
             for (auto* k : { &ampGain, &ampVolume, &ampBass, &ampMiddle, &ampTreble, &ampPresence, &ampMaster })
-                k->setBounds (knobs.removeFromLeft (w).reduced (1, 0));
+                k->setBounds (knobs.removeFromLeft (w));
         }
-        b.removeFromTop (8);
-        auto top = b.removeFromTop (28);
-        nextCapture.setBounds (top.removeFromRight (30));
-        top.removeFromRight (4);
-        prevCapture.setBounds (top.removeFromRight (30));
-        top.removeFromRight (8);
-        loadCaptureButton.setBounds (top);
-        b.removeFromTop (8);
-        auto left = b.removeFromLeft (juce::jmin (b.getWidth(), 360));
-        captureName.setBounds (left.removeFromTop (24));
-        captureInfo.setBounds (left.removeFromTop (22));
-        normalise.setBounds (left.removeFromTop (24));
-        b.removeFromLeft (8);
-        auto knobs = b.removeFromTop (100);
-        aidaKnob1.setBounds (knobs.removeFromLeft (90));
-        aidaKnob2.setBounds (knobs.removeFromLeft (90));
+        auto cap = panel;
+        auto buttons = cap.removeFromTop (26);
+        loadCaptureButton.setBounds (buttons.removeFromLeft (170));
+        buttons.removeFromLeft (6);
+        prevCapture.setBounds (buttons.removeFromLeft (30));
+        buttons.removeFromLeft (4);
+        nextCapture.setBounds (buttons.removeFromLeft (30));
+        cap.removeFromTop (4);
+        auto text = cap.removeFromLeft (juce::jmin (cap.getWidth() - 180, 380));
+        captureName.setBounds (text.removeFromTop (24));
+        captureInfo.setBounds (text.removeFromTop (18));
+        normalise.setBounds (text.removeFromTop (24));
+        aidaKnob1.setBounds (cap.removeFromLeft (90));
+        aidaKnob2.setBounds (cap.removeFromLeft (90));
     }
+
+    // cabinet: controls over the grill cloth
     {
-        auto b = cabPanel.getLocalBounds().reduced (12).withTrimmedTop (24);
-        cabModeSelect.setBounds (b.removeFromTop (26));
+        auto b = cabPanel.getLocalBounds().reduced (24, 14).withTrimmedTop (18);
+        cabModeSelect.setBounds (b.removeFromTop (24));
         b.removeFromTop (6);
         auto ir = b;
         loadIrButton.setBounds (ir.removeFromTop (28));
         ir.removeFromTop (6);
-        irName.setBounds (ir.removeFromTop (40));
+        irName.setBounds (ir.removeFromTop (44));
         clearIrButton.setBounds (ir.removeFromTop (26).removeFromLeft (90));
         auto sim = b;
         cabTypeSelect.setBounds (sim.removeFromTop (24));
@@ -403,19 +490,10 @@ void MainComponent::resized()
         micPosition.setBounds (sim.removeFromLeft (sim.getWidth() / 2));
         micDistance.setBounds (sim);
     }
-    {
-        auto b = eqPanel.getLocalBounds().reduced (10).withTrimmedTop (24);
-        PanelLayout::row (b.withSizeKeepingCentre (b.getWidth(), 110), { &bass, &middle, &treble });
-    }
-    {
-        auto b = outputPanel.getLocalBounds().reduced (10).withTrimmedTop (24);
-        outputMeter.setBounds (b.removeFromRight (14));
-        outputGain.setBounds (b.withSizeKeepingCentre (b.getWidth(), 110));
-    }
 
-    r.removeFromTop (12);
-    pedalboardView.setBounds (r.removeFromTop (juce::jmax (330, r.getHeight() - 220)));
-    r.removeFromTop (12);
+    r.removeFromTop (10);
+    pedalboardView.setBounds (r.removeFromTop (juce::jmax (370, r.getHeight() - 200)));
+    r.removeFromTop (10);
     browser.setBounds (r);
 }
 
@@ -573,23 +651,7 @@ void MainComponent::saveState()
     settings.setValue ("outputGain", outputGain.slider.getValue());
     settings.setValue ("pedalboard", juce::JSON::toString (chain.getPedalboard().toVar(), true));
 
-    auto& a = chain.getAmp();
-    auto* ampState = new juce::DynamicObject();
-    ampState->setProperty ("source", ampSourceSelect.getSelectedId() == 2 ? "amp" : "capture");
-    ampState->setProperty ("model", amp::voicing (a.voicingIndex.load()).id);
-    ampState->setProperty ("gain", ampGain.slider.getValue());
-    ampState->setProperty ("volume", ampVolume.slider.getValue());
-    ampState->setProperty ("bass", ampBass.slider.getValue());
-    ampState->setProperty ("middle", ampMiddle.slider.getValue());
-    ampState->setProperty ("treble", ampTreble.slider.getValue());
-    ampState->setProperty ("presence", ampPresence.slider.getValue());
-    ampState->setProperty ("master", ampMaster.slider.getValue());
-    ampState->setProperty ("cabinetMode", cabModeSelect.getSelectedId() == 2 ? "ir" : "simulated");
-    ampState->setProperty ("cabinet", amp::cabinet (chain.getCabinet().cabinetIndex.load()).id);
-    ampState->setProperty ("mic", amp::mic (chain.getCabinet().micIndex.load()).id);
-    ampState->setProperty ("micPosition", micPosition.slider.getValue());
-    ampState->setProperty ("micDistance", micDistance.slider.getValue());
-    settings.setValue ("amp", juce::JSON::toString (juce::var (ampState), true));
+    settings.setValue ("amp", juce::JSON::toString (ampStateVar(), true));
     settings.saveIfNeeded();
 }
 
@@ -642,22 +704,7 @@ void MainComponent::restoreState()
     const auto ampState = juce::JSON::parse (settings.getValue ("amp"));
     if (ampState.isObject())
     {
-        auto num = [&] (const char* key, Knob& k)
-        {
-            if (ampState.hasProperty (key))
-                k.slider.setValue ((double) ampState[key], juce::sendNotificationSync);
-        };
-        num ("gain", ampGain); num ("volume", ampVolume); num ("bass", ampBass); num ("middle", ampMiddle);
-        num ("treble", ampTreble); num ("presence", ampPresence); num ("master", ampMaster);
-        num ("micPosition", micPosition); num ("micDistance", micDistance);
-        const int v = amp::voicingIndexForId (ampState["model"].toString());
-        if (v >= 0) voicingSelect.setSelectedId (v + 1, juce::sendNotificationSync);
-        const int c = amp::cabinetIndexForId (ampState["cabinet"].toString().toRawUTF8());
-        if (c >= 0) cabTypeSelect.setSelectedId (c + 1, juce::sendNotificationSync);
-        const int m = amp::micIndexForId (ampState["mic"].toString().toRawUTF8());
-        if (m >= 0) micSelect.setSelectedId (m + 1, juce::sendNotificationSync);
-        ampSourceSelect.setSelectedId (ampState["source"].toString() == "amp" ? 2 : 1, juce::sendNotificationSync);
-        cabModeSelect.setSelectedId (ampState["cabinetMode"].toString() == "ir" ? 2 : 1, juce::sendNotificationSync);
+        applyAmpState (ampState);
     }
     else
     {
@@ -666,13 +713,163 @@ void MainComponent::restoreState()
         for (auto* k : { &ampGain, &ampVolume, &ampBass, &ampMiddle, &ampTreble, &ampPresence, &ampMaster, &micPosition, &micDistance })
             k->slider.setValue (k->slider.getValue(), juce::sendNotificationSync);
     }
+    refreshPresetList (settings.getValue ("preset"));
     updateAmpControls();
+}
+
+juce::var MainComponent::ampStateVar() const
+{
+    auto& a = const_cast<SignalChain&> (chain).getAmp();
+    auto& cab = const_cast<SignalChain&> (chain).getCabinet();
+    auto* o = new juce::DynamicObject();
+    o->setProperty ("source", ampSourceSelect.getSelectedId() == 2 ? "amp" : "capture");
+    o->setProperty ("model", amp::voicing (a.voicingIndex.load()).id);
+    o->setProperty ("gain", ampGain.slider.getValue());
+    o->setProperty ("volume", ampVolume.slider.getValue());
+    o->setProperty ("bass", ampBass.slider.getValue());
+    o->setProperty ("middle", ampMiddle.slider.getValue());
+    o->setProperty ("treble", ampTreble.slider.getValue());
+    o->setProperty ("presence", ampPresence.slider.getValue());
+    o->setProperty ("master", ampMaster.slider.getValue());
+    o->setProperty ("cabinetMode", cabModeSelect.getSelectedId() == 2 ? "ir" : "simulated");
+    o->setProperty ("cabinet", amp::cabinet (cab.cabinetIndex.load()).id);
+    o->setProperty ("mic", amp::mic (cab.micIndex.load()).id);
+    o->setProperty ("micPosition", micPosition.slider.getValue());
+    o->setProperty ("micDistance", micDistance.slider.getValue());
+    return juce::var (o);
+}
+
+void MainComponent::applyAmpState (const juce::var& ampState)
+{
+    auto num = [&] (const char* key, Knob& k)
+    {
+        if (ampState.hasProperty (key))
+            k.slider.setValue ((double) ampState[key], juce::sendNotificationSync);
+    };
+    num ("gain", ampGain); num ("volume", ampVolume); num ("bass", ampBass); num ("middle", ampMiddle);
+    num ("treble", ampTreble); num ("presence", ampPresence); num ("master", ampMaster);
+    num ("micPosition", micPosition); num ("micDistance", micDistance);
+    const int v = amp::voicingIndexForId (ampState["model"].toString());
+    if (v >= 0) voicingSelect.setSelectedId (v + 1, juce::sendNotificationSync);
+    const int c = amp::cabinetIndexForId (ampState["cabinet"].toString().toRawUTF8());
+    if (c >= 0) cabTypeSelect.setSelectedId (c + 1, juce::sendNotificationSync);
+    const int m = amp::micIndexForId (ampState["mic"].toString().toRawUTF8());
+    if (m >= 0) micSelect.setSelectedId (m + 1, juce::sendNotificationSync);
+    ampSourceSelect.setSelectedId (ampState["source"].toString() == "amp" ? 2 : 1, juce::sendNotificationSync);
+    cabModeSelect.setSelectedId (ampState["cabinetMode"].toString() == "ir" ? 2 : 1, juce::sendNotificationSync);
+}
+
+juce::var MainComponent::boardStateVar() const
+{
+    auto* o = new juce::DynamicObject();
+    o->setProperty ("pedalboard", const_cast<SignalChain&> (chain).getPedalboard().toVar());
+    o->setProperty ("amp", ampStateVar());
+    o->setProperty ("capture", currentCaptureFile.getFullPathName());
+    o->setProperty ("ir", currentIrFile.getFullPathName());
+    o->setProperty ("captureOn", capturePanel.bypass.getToggleState());
+    o->setProperty ("irOn", cabPanel.bypass.getToggleState());
+    o->setProperty ("normalise", normalise.getToggleState());
+    o->setProperty ("gateOn", gatePanel.bypass.getToggleState());
+    o->setProperty ("gateThreshold", gateThreshold.slider.getValue());
+    o->setProperty ("bass", bass.slider.getValue());
+    o->setProperty ("middle", middle.slider.getValue());
+    o->setProperty ("treble", treble.slider.getValue());
+    o->setProperty ("outputGain", outputGain.slider.getValue());
+    return juce::var (o);
+}
+
+void MainComponent::applyBoardState (const juce::var& st)
+{
+    const juce::ScopedValueSetter<bool> scope (restoring, true); // one save at the end, not one per control
+    const juce::File capture (st["capture"].toString()), ir (st["ir"].toString());
+    if (capture.existsAsFile() && capture != currentCaptureFile)
+        loadCapture (capture);
+    if (ir.existsAsFile() && ir != currentIrFile)
+        loadImpulseResponse (ir);
+
+    auto toggle = [&] (ModulePanel& p, const char* key)
+    {
+        if (! st.hasProperty (key)) return;
+        p.bypass.setToggleState ((bool) st[key], juce::dontSendNotification);
+        if (p.onBypassChanged) p.onBypassChanged (p.bypass.getToggleState());
+        p.repaint();
+    };
+    toggle (capturePanel, "captureOn");
+    toggle (cabPanel, "irOn");
+    toggle (gatePanel, "gateOn");
+    if (st.hasProperty ("normalise"))
+    {
+        normalise.setToggleState ((bool) st["normalise"], juce::dontSendNotification);
+        chain.normaliseLoudness = normalise.getToggleState();
+    }
+    auto num = [&] (const char* key, Knob& k)
+    {
+        if (st.hasProperty (key))
+            k.slider.setValue ((double) st[key], juce::sendNotificationSync);
+    };
+    num ("gateThreshold", gateThreshold); num ("bass", bass); num ("middle", middle); num ("treble", treble); num ("outputGain", outputGain);
+    if (st["amp"].isObject())
+        applyAmpState (st["amp"]);
+    if (st["pedalboard"].isObject())
+        chain.getPedalboard().fromVar (st["pedalboard"]);
+    pedalboardView.rebuild();
+    bpmLabel.setText (juce::String (chain.getPedalboard().tempo().bpm.load(), 1) + " BPM", juce::dontSendNotification);
+    updateAmpControls();
+}
+
+void MainComponent::refreshPresetList (const juce::String& select)
+{
+    presetSelect.clear (juce::dontSendNotification);
+    const auto names = presets.names();
+    for (int i = 0; i < names.size(); ++i)
+        presetSelect.addItem (names[i], i + 1);
+    const int index = names.indexOf (select);
+    if (index >= 0)
+        presetSelect.setSelectedId (index + 1, juce::dontSendNotification);
+    deletePresetButton.setEnabled (index >= 0);
+}
+
+void MainComponent::savePresetAs()
+{
+    auto* w = new juce::AlertWindow (utf8 ("Salvar pedaleira"), utf8 ("Nome da pedaleira (amp, gabinete, pedais, ordem e BPM):"),
+                                     juce::MessageBoxIconType::NoIcon);
+    w->addTextEditor ("name", presetSelect.getSelectedId() > 0 ? presetSelect.getText() : juce::String());
+    w->addButton ("Salvar", 1, juce::KeyPress (juce::KeyPress::returnKey));
+    w->addButton ("Cancelar", 0, juce::KeyPress (juce::KeyPress::escapeKey));
+    w->enterModalState (true, juce::ModalCallbackFunction::create ([this, w] (int result)
+    {
+        if (result != 1)
+            return;
+        const auto name = PresetStore::sanitise (w->getTextEditorContents ("name"));
+        juce::String error;
+        if (! presets.save (name, boardStateVar(), error))
+        {
+            showError ("Pedaleira", error);
+            return;
+        }
+        settings.setValue ("preset", name);
+        refreshPresetList (name);
+    }), true);
+}
+
+void MainComponent::deleteCurrentPreset()
+{
+    const auto name = presetSelect.getText();
+    if (presetSelect.getSelectedId() <= 0)
+        return;
+    const auto options = juce::MessageBoxOptions::makeOptionsOkCancel (juce::MessageBoxIconType::QuestionIcon, utf8 ("Excluir pedaleira"),
+                                                                        utf8 ("Excluir \"") + name + "\"?", "Excluir", "Cancelar", this);
+    juce::AlertWindow::showAsync (options, [this, name] (int ok)
+    {
+        if (ok == 1 && presets.remove (name))
+            refreshPresetList();
+    });
 }
 
 void MainComponent::updateAmpControls()
 {
     const bool model = ampSourceSelect.getSelectedId() == 2;
-    for (juce::Component* c : std::initializer_list<juce::Component*> { &voicingSelect, &voicingInfo, &ampGain, &ampVolume, &ampBass,
+    for (juce::Component* c : std::initializer_list<juce::Component*> { &ampGain, &ampVolume, &ampBass,
                                                                         &ampMiddle, &ampTreble, &ampPresence, &ampMaster })
         c->setVisible (model);
     for (juce::Component* c : std::initializer_list<juce::Component*> { &loadCaptureButton, &prevCapture, &nextCapture, &captureName,
@@ -680,7 +877,10 @@ void MainComponent::updateAmpControls()
         c->setVisible (! model);
     aidaKnob1.setVisible (! model && chain.getCaptureConditioningInputs() >= 1);
     aidaKnob2.setVisible (! model && chain.getCaptureConditioningInputs() >= 2);
-    voicingInfo.setText (utf8 (amp::voicing (voicingSelect.getSelectedId() - 1).description), juce::dontSendNotification);
+    voicingInfo.setText (model ? utf8 (amp::voicing (voicingSelect.getSelectedId() - 1).description) : utf8 ("Captura NAM / AIDA-X"), juce::dontSendNotification);
+    capturePanel.setHeadline (model ? utf8 (amp::voicing (voicingSelect.getSelectedId() - 1).name)
+                                    : (chain.getCaptureName().isEmpty() ? juce::String ("CAPTURA") : chain.getCaptureName()));
+    voicingSelect.setVisible (model);
 
     const bool irMode = cabModeSelect.getSelectedId() == 2;
     for (juce::Component* c : std::initializer_list<juce::Component*> { &loadIrButton, &irName, &clearIrButton })
