@@ -15,6 +15,7 @@ PedalStyle styleFor (const std::string& t)
     if (t == "phaser")     return { "PHASE 8", "phaser", juce::Colour (0xffe07a2e), juce::Colour (0xff1b1c21) };
     if (t == "tremolo")    return { "PULSO", "tremolo", juce::Colour (0xff3a7d44), juce::Colours::white };
     if (t == "delay")      return { "ECHOES", "delay", juce::Colour (0xff27303d), juce::Colour (0xffe8e6e1) };
+    if (t == "dualdelay")  return { "GEMINI", "dual delay L + R", juce::Colour (0xff3d2f4f), juce::Colour (0xffe8e6e1) };
     if (t == "reverb")     return { "NIMBUS", "reverb", juce::Colour (0xff1f3a5c), juce::Colour (0xffe8e6e1) };
     return { "PEDAL", "", colours::panelEdge, colours::text };
 }
@@ -78,7 +79,7 @@ PedalComponent::PedalComponent (fx::Effect& effect, int index)
 int PedalComponent::preferredWidth() const noexcept
 {
     const int n = (int) knobs.size();
-    return n <= 2 ? 130 : (n <= 4 ? 150 : 230);
+    return n <= 2 ? 130 : (n <= 4 ? 150 : (n <= 6 ? 230 : 330));
 }
 
 void PedalComponent::refreshFromEffect()
@@ -135,16 +136,26 @@ void PedalComponent::resized()
 {
     auto r = getLocalBounds().reduced (12);
     r.removeFromTop (20); // LED
-    for (auto& [param, box] : selectors)
+    // wide pedals (many controls) put their selectors side by side, two per row
+    const bool wide = knobs.size() > 6;
+    for (size_t s = 0; s < selectors.size(); ++s)
     {
-        juce::ignoreUnused (param);
-        box->setBounds (r.removeFromTop (22).reduced (2, 0));
+        auto row = r.removeFromTop (22);
+        if (wide && s + 1 < selectors.size())
+        {
+            selectors[s].second->setBounds (row.removeFromLeft (row.getWidth() / 2).reduced (2, 0));
+            selectors[++s].second->setBounds (row.reduced (2, 0));
+        }
+        else
+        {
+            selectors[s].second->setBounds (row.reduced (2, 0));
+        }
         r.removeFromTop (3);
     }
 
     footswitch.setBounds (juce::Rectangle<int> (44, 44).withCentre ({ getWidth() / 2, getHeight() - 38 }));
     auto knobArea = r.withTrimmedBottom (110);
-    const int cols = knobs.size() <= 2 ? (int) knobs.size() : (knobs.size() <= 4 ? 2 : 3);
+    const int cols = knobs.size() <= 2 ? (int) knobs.size() : (knobs.size() <= 4 ? 2 : (knobs.size() <= 6 ? 3 : 5));
     const int rows = cols == 0 ? 0 : ((int) knobs.size() + cols - 1) / cols;
     if (rows == 0)
         return;

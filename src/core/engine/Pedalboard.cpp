@@ -1,6 +1,7 @@
 #include "engine/Pedalboard.h"
 
 #include "effects/Delay.h"
+#include "effects/DualDelay.h"
 #include "effects/Drives.h"
 #include "effects/Modulation.h"
 #include "effects/Reverb.h"
@@ -22,6 +23,7 @@ Pedalboard::Pedalboard()
     pedals.push_back (std::make_unique<fx::Phaser>());
     pedals.push_back (std::make_unique<fx::Tremolo>());
     pedals.push_back (std::make_unique<fx::Delay>());
+    pedals.push_back (std::make_unique<fx::DualDelay>());
     pedals.push_back (std::make_unique<fx::Reverb>());
 
     for (auto& p : pedals)
@@ -40,6 +42,7 @@ Pedalboard::Pedalboard()
         if (pedals[(size_t) i]->getPlacement() == fx::Effect::Placement::PostAmp)
             order.push_back (i);
 
+    defaults = order;
     sharedOrder = order;
     activeOrder.reserve (pedals.size() + 1);
     activeOrder = order;
@@ -156,8 +159,24 @@ void Pedalboard::fromVar (const juce::var& v)
         for (const auto& item : *arr)
         {
             const auto s = item.toString();
-            order.push_back (s == "amp" ? ampSlot : indexOfType (s.toStdString()));
+            const int slot = s == "amp" ? ampSlot : indexOfType (s.toStdString());
+            if (slot != -1 || s == "amp")
+                order.push_back (slot);
         }
+        // pedals added in a newer version than the saved preset go in their default place:
+        // right after the pedal that precedes them in the default order
+        for (size_t d = 0; d < defaults.size(); ++d)
+            if (std::find (order.begin(), order.end(), defaults[d]) == order.end())
+            {
+                auto pos = order.begin();
+                if (d > 0)
+                {
+                    const auto prev = std::find (order.begin(), order.end(), defaults[d - 1]);
+                    if (prev != order.end())
+                        pos = prev + 1;
+                }
+                order.insert (pos, defaults[d]);
+            }
         setOrder (order); // ignored if it doesn't list every pedal exactly once
     }
 }

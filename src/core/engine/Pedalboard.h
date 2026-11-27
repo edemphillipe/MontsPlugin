@@ -34,6 +34,7 @@ public:
 
     // Order = list of pedal indices with exactly one ampSlot entry.
     std::vector<int> getOrder() const;
+    const std::vector<int>& defaultOrder() const noexcept { return defaults; }
     void setOrder (const std::vector<int>& newOrder); // UI thread; invalid orders are ignored
     void movePedal (int pedalIndex, int newPosition);  // UI helper (position in the order list)
 
@@ -71,6 +72,7 @@ private:
     fx::TempoClock clock;
 
     juce::SpinLock orderLock;
+    std::vector<int> defaults;      // order on first start
     std::vector<int> sharedOrder;   // guarded by orderLock
     bool orderChanged = false;      // guarded by orderLock
     std::vector<int> activeOrder;   // audio thread only (capacity reserved, never reallocates)
