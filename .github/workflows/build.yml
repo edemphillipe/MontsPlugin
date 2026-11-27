@@ -19,7 +19,7 @@ jobs:
       matrix:
         include:
           - name: macOS (Apple Silicon + Intel)
-            os: macos-15
+            os: macos-15-intel
             artifact: GuitarStudioPro-macOS
           - name: Windows (x64)
             os: windows-latest
