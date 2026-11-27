@@ -16,7 +16,13 @@ Estúdio de guitarra **standalone** (não precisa de DAW) para **macOS** e **Win
 | Noise gate, EQ de 3 bandas (64 bits), ganho de entrada e saída, medidores | Pronto | Testes do gate; EQ precisa de teste de ouvido |
 | Biblioteca: pasta, organização por fabricante/modelo (subpastas), busca, favoritos, anterior/próxima | Pronto | |
 | Lembrar configurações (interface, captura, IR, knobs, favoritos) | Pronto | |
-| Pedais, amplificadores próprios, tap tempo | Fase 2 | |
+| Pedaleira com 11 pedais: compressor, boost, overdrive, distortion, fuzz, chorus, flanger, phaser, tremolo, delay, reverb | Pronto | 15 testes automáticos (ganho, aliasing com oversampling 8x, estabilidade com feedback máximo, ausência de NaN/cliques); precisa do seu teste de ouvido |
+| Delay estéreo: Digital, Analógico, Fita, Reverso, Ping-pong, Modulado | Pronto | Tempo do eco medido em teste (erro < 1 amostra) |
+| Reverb estéreo: Hall, Plate, Room, Spring, Ambient, Cloud, Shimmer | Pronto | Cauda decai e é estável em todos os modos (teste) |
+| Tap tempo (botão TAP ou tecla T) e subdivisões (1/4, 1/8, pontuadas, tercinas) | Pronto | Teste do cálculo de BPM e do reset após pausa |
+| Arrastar pedais para mudar a ordem, inclusive antes/depois do amp | Pronto | Testado na interface; ordem salva e restaurada |
+| Uso de CPU com todos os pedais ligados | Medido | 4,7% de um núcleo (48 kHz, buffer 128) |
+| Amplificadores próprios (Gain/Volume/Bass/Mid/Treble/Presence/Master), gabinete e microfone | Fase 2 (próximo PR) | Ainda não existe |
 | Gravação, mixer, reamp, música de referência | Fase 3 | |
 | Projetos/presets, instaladores assinados | Fase 4 | |
 

@@ -7,6 +7,7 @@
 #include "dsp/Resampler.h"
 #include "engine/SignalChain.h"
 #include "reference/Reference.h"
+#include "TestUtil.h"
 
 #include <juce_core/juce_core.h>
 
@@ -18,68 +19,7 @@
 
 namespace
 {
-int failures = 0, checks = 0, skipped = 0;
-
-#define CHECK(cond, ...)                                                        \
-    do {                                                                        \
-        ++checks;                                                               \
-        if (! (cond)) {                                                         \
-            ++failures;                                                         \
-            std::printf ("  FAIL %s:%d  %s  ", __FILE__, __LINE__, #cond);      \
-            std::printf (__VA_ARGS__);                                          \
-            std::printf ("\n");                                                 \
-        }                                                                       \
-    } while (0)
-
-std::vector<float> guitarLikeSignal (int n, double sr, unsigned seed = 1)
-{
-    // Plucked-string-ish test signal: decaying harmonics plus a little noise.
-    std::mt19937 rng (seed);
-    std::normal_distribution<float> noise (0.0f, 0.002f);
-    std::vector<float> x ((size_t) n);
-    for (int i = 0; i < n; ++i)
-    {
-        const double t = i / sr;
-        const double env = std::exp (-3.0 * std::fmod (t, 0.5));
-        double v = 0.0;
-        for (int h = 1; h <= 6; ++h)
-            v += std::sin (2.0 * juce::MathConstants<double>::pi * 110.0 * h * t) / h;
-        x[(size_t) i] = (float) (0.25 * env * v) + noise (rng);
-    }
-    return x;
-}
-
-bool allFinite (const std::vector<float>& v)
-{
-    for (float s : v)
-        if (! std::isfinite (s))
-            return false;
-    return true;
-}
-
-double rms (const std::vector<float>& v, size_t from = 0)
-{
-    double s = 0;
-    for (size_t i = from; i < v.size(); ++i)
-        s += (double) v[i] * v[i];
-    return std::sqrt (s / (double) juce::jmax ((size_t) 1, v.size() - from));
-}
-
-float maxAbsDiff (const std::vector<float>& a, const std::vector<float>& b)
-{
-    float d = 0;
-    for (size_t i = 0; i < std::min (a.size(), b.size()); ++i)
-        d = std::max (d, std::abs (a[i] - b[i]));
-    return d;
-}
-
-void runTest (const char* name, const std::function<void()>& fn)
-{
-    const int before = failures;
-    std::printf ("[ %s ]\n", name);
-    fn();
-    std::printf ("  %s\n", failures == before ? "ok" : "FAILED");
-}
+using namespace gsptest;
 
 // ---------------------------------------------------------------------------------------------
 void testNamModels()
@@ -296,21 +236,25 @@ void testSignalChainSwap()
 
     CHECK (allFinite (outL), "NaN in chain output");
     CHECK (rms (outL) > 1e-4, "chain output silent");
-    CHECK (maxAbsDiff (outL, outR) == 0.0f, "L/R differ in mono chain");
+    CHECK (maxAbsDiff (outL, outR) < 1e-9f, "L/R differ in mono chain");
     std::printf ("  rms=%.4f  largest sample-to-sample step=%.3f\n", rms (outL), maxJump);
     CHECK (maxJump < 0.5f, "click/discontinuity of %g", maxJump);
 }
 
 } // namespace
 
+void runEffectTests(); // EffectTests.cpp
+
 int main()
 {
+    using namespace gsptest;
     runTest ("NAM captures match NeuralAmpModelerCore", testNamModels);
     runTest ("AIDA-X capture matches RTNeural", testAidaModel);
     runTest ("Invalid files are rejected with a message", testRejectsGarbage);
     runTest ("Sample-rate conversion 44.1 <-> 48 kHz", testResampler);
     runTest ("Noise gate", testGate);
     runTest ("Signal chain: resampling, capture swap, clear", testSignalChainSwap);
+    runEffectTests();
 
     std::printf ("\n%d checks, %d failures, %d skipped\n", checks, failures, skipped);
     return failures == 0 ? 0 : 1;

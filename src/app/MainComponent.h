@@ -1,6 +1,7 @@
 #pragma once
 
 #include "CaptureBrowser.h"
+#include "PedalboardView.h"
 #include "LookAndFeel.h"
 #include "Widgets.h"
 
@@ -23,8 +24,11 @@ public:
 
     void paint (juce::Graphics&) override;
     void resized() override;
+    bool keyPressed (const juce::KeyPress&) override;
 
 private:
+    void tap();
+    void setBpm (double bpm);
     // audio
     void audioDeviceIOCallbackWithContext (const float* const* inputs, int numInputs,
                                            float* const* outputs, int numOutputs, int numSamples,
@@ -60,6 +64,9 @@ private:
     juce::Label appTitle, deviceLabel;
     juce::TextButton audioButton { gsp::ui::utf8 ("Configurar áudio") };
     juce::ComboBox inputSelect;
+    juce::TextButton tapButton { "TAP" };
+    juce::Label bpmLabel;
+    TapTempo tapTempo;
 
     // modules
     ModulePanel inputPanel { "ENTRADA", false }, gatePanel { "NOISE GATE" }, capturePanel { "CAPTURA  NAM / AIDA-X" },
@@ -83,6 +90,7 @@ private:
     Knob outputGain { "VOLUME", -40.0, 12.0, 0.0, " dB" };
     Meter outputMeter;
 
+    PedalboardView pedalboardView { chain.getPedalboard() };
     CaptureBrowser browser;
 
     std::unique_ptr<juce::FileChooser> chooser;

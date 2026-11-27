@@ -35,6 +35,24 @@ MainComponent::MainComponent (juce::PropertiesFile& s) : settings (s)
     inputSelect.onChange = [this] { inputChannel.store (juce::jmax (0, inputSelect.getSelectedId() - 1)); };
     addAndMakeVisible (inputSelect);
 
+    tapButton.setTooltip ("Toque no ritmo (ou aperte T) para definir o BPM dos delays e modulações");
+    tapButton.onClick = [this] { tap(); };
+    tapButton.setColour (juce::TextButton::buttonColourId, colours::accent.darker (0.3f));
+    tapButton.setColour (juce::TextButton::textColourOffId, colours::background);
+    addAndMakeVisible (tapButton);
+    bpmLabel.setEditable (true);
+    bpmLabel.setJustificationType (juce::Justification::centred);
+    bpmLabel.setFont (juce::FontOptions (16.0f, juce::Font::bold));
+    bpmLabel.setColour (juce::Label::textColourId, colours::accent);
+    bpmLabel.setTooltip (utf8 ("BPM: clique duas vezes para digitar"));
+    bpmLabel.onTextChange = [this] { setBpm (bpmLabel.getText().retainCharacters ("0123456789.").getDoubleValue()); };
+    addAndMakeVisible (bpmLabel);
+    setWantsKeyboardFocus (true);
+
+    // ---------------- pedalboard
+    addAndMakeVisible (pedalboardView);
+    pedalboardView.onChanged = [this] { saveState(); };
+
     // ---------------- input
     addAndMakeVisible (inputPanel);
     inputPanel.addAndMakeVisible (inputGain);
@@ -116,7 +134,7 @@ MainComponent::MainComponent (juce::PropertiesFile& s) : settings (s)
     refreshInputChoices();
     updateDeviceLabel();
 
-    setSize (1180, 760);
+    setSize (1280, 940);
     startTimerHz (30);
 }
 
@@ -162,10 +180,44 @@ void MainComponent::audioDeviceIOCallbackWithContext (const float* const* inputs
 // ======================================================================= ui
 void MainComponent::timerCallback()
 {
+    // TAP button blinks on the beat
+    const double beat = 60.0 / chain.getPedalboard().tempo().bpm.load();
+    const bool lit = std::fmod (juce::Time::getMillisecondCounterHiRes() * 0.001, beat) < 0.08;
+    tapButton.setColour (juce::TextButton::buttonColourId, lit ? colours::accent : colours::accent.darker (0.5f));
+
     const auto levels = chain.readAndResetLevels();
     inputMeter.setPeak (levels.inputPeak);
     outputMeter.setPeak (levels.outputPeak);
     chain.collectGarbage();
+}
+
+void MainComponent::tap()
+{
+    const double bpm = tapTempo.tap (juce::Time::getMillisecondCounterHiRes() * 0.001);
+    if (bpm > 0.0)
+        setBpm (bpm);
+}
+
+void MainComponent::setBpm (double bpm)
+{
+    if (bpm < 30.0 || bpm > 300.0)
+    {
+        bpmLabel.setText (juce::String (chain.getPedalboard().tempo().bpm.load(), 1) + " BPM", juce::dontSendNotification);
+        return;
+    }
+    chain.getPedalboard().tempo().bpm = bpm;
+    bpmLabel.setText (juce::String (bpm, 1) + " BPM", juce::dontSendNotification);
+    saveState();
+}
+
+bool MainComponent::keyPressed (const juce::KeyPress& key)
+{
+    if (key.getTextCharacter() == 't' || key.getTextCharacter() == 'T')
+    {
+        tap();
+        return true;
+    }
+    return false;
 }
 
 void MainComponent::changeListenerCallback (juce::ChangeBroadcaster*)
@@ -203,12 +255,15 @@ void MainComponent::resized()
     appTitle.setBounds (header.removeFromLeft (280));
     audioButton.setBounds (header.removeFromRight (150).reduced (0, 4));
     header.removeFromRight (8);
+    bpmLabel.setBounds (header.removeFromRight (90).reduced (0, 4));
+    tapButton.setBounds (header.removeFromRight (60).reduced (0, 4));
+    header.removeFromRight (8);
     inputSelect.setBounds (header.removeFromRight (150).reduced (0, 4));
     header.removeFromRight (8);
     deviceLabel.setBounds (header);
 
     r.removeFromTop (12);
-    auto chainRow = r.removeFromTop (250);
+    auto chainRow = r.removeFromTop (220);
     const int gap = 14;
     auto take = [&] (int w) { auto b = chainRow.removeFromLeft (w); chainRow.removeFromLeft (gap); return b; };
 
@@ -263,7 +318,9 @@ void MainComponent::resized()
         outputGain.setBounds (b.withSizeKeepingCentre (b.getWidth(), 110));
     }
 
-    r.removeFromTop (14);
+    r.removeFromTop (12);
+    pedalboardView.setBounds (r.removeFromTop (juce::jmax (330, r.getHeight() - 220)));
+    r.removeFromTop (12);
     browser.setBounds (r);
 }
 
@@ -370,6 +427,7 @@ void MainComponent::loadCapture (const juce::File& file)
     currentCaptureFile = file;
     captureName.setText (chain.getCaptureName(), juce::dontSendNotification);
     captureInfo.setText (chain.getCaptureDescription(), juce::dontSendNotification);
+    pedalboardView.setCaptureName (chain.getCaptureName());
     aidaKnob1.setVisible (chain.getCaptureConditioningInputs() >= 1);
     aidaKnob2.setVisible (chain.getCaptureConditioningInputs() >= 2);
     browser.highlight (file);
@@ -414,6 +472,7 @@ void MainComponent::saveState()
     settings.setValue ("middle", middle.slider.getValue());
     settings.setValue ("treble", treble.slider.getValue());
     settings.setValue ("outputGain", outputGain.slider.getValue());
+    settings.setValue ("pedalboard", juce::JSON::toString (chain.getPedalboard().toVar(), true));
     settings.saveIfNeeded();
 }
 
@@ -444,6 +503,11 @@ void MainComponent::restoreState()
     restoreToggle (cabPanel, "irOn");
     normalise.setToggleState (settings.getBoolValue ("normalise", true), juce::dontSendNotification);
     chain.normaliseLoudness = normalise.getToggleState();
+
+    if (settings.containsKey ("pedalboard"))
+        chain.getPedalboard().fromVar (juce::JSON::parse (settings.getValue ("pedalboard")));
+    pedalboardView.rebuild();
+    bpmLabel.setText (juce::String (chain.getPedalboard().tempo().bpm.load(), 1) + " BPM", juce::dontSendNotification);
 
     browser.setFavourites (juce::StringArray::fromLines (settings.getValue ("favourites")));
     const juce::File library (settings.getValue ("library"));

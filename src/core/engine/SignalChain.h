@@ -2,7 +2,8 @@
 
 // Phase 1 signal chain, shared by macOS and Windows:
 //
-//   input gain -> noise gate -> capture (NAM / AIDA-X) -> cabinet IR -> EQ -> output gain
+//   input gain -> noise gate -> [pedals] -> AMP (capture -> cabinet IR -> EQ) -> [pedals] -> output gain
+//   (the AMP block can sit anywhere in the pedal order; after it the chain is stereo)
 //
 // Threading: the audio thread calls process(); the UI thread calls the setters and
 // loadCapture/loadImpulseResponse. Captures are swapped without locks: a new capture is
@@ -13,6 +14,7 @@
 #include "dsp/Biquad.h"
 #include "dsp/NoiseGate.h"
 #include "engine/CaptureSlot.h"
+#include "engine/Pedalboard.h"
 
 #include <juce_dsp/juce_dsp.h>
 
@@ -64,13 +66,17 @@ public:
 
     Levels readAndResetLevels() noexcept;
 
+    Pedalboard& getPedalboard() noexcept { return pedalboard; }
+
 private:
     void updateEq() noexcept;
+    void processAmp (float* mono, int numSamples) noexcept;
 
     double sampleRate = 48000.0;
     int maxBlock = 512;
 
-    juce::HeapBlock<float> work;
+    juce::HeapBlock<float> work, workR;
+    Pedalboard pedalboard;
     NoiseGate gate;
 
     // capture handover
