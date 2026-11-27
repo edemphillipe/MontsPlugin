@@ -27,8 +27,12 @@ Estúdio de guitarra **standalone** (não precisa de DAW) para **macOS** e **Win
 | 6 amplificadores próprios (Americano Limpo, Brit Crunch, Chime Classe A, Brit Espesso, Lead Hot-Rod, Moderno Alto Ganho) com GAIN, VOLUME, BASS, MIDDLE, TREBLE, PRESENCE, MASTER | Pronto | Tone stack: equações do circuito conferidas com uma solução numérica independente (diferença 0,0001 dB) e o filtro digital com as equações (0,05 dB). GAIN aumenta a distorção em todos; volumes calibrados para -18 dBFS RMS com knobs em 5. Precisa do seu teste de ouvido |
 | Simulação de gabinete (5 caixas) e microfone (dinâmico, fita, condensador) com posição e distância | Pronto | Modelo por filtros (não é IR medido). Testes: corte de agudos do alto-falante, posição escurece o som na borda, distância reduz o grave de proximidade. Para um gabinete real específico, use um IR |
 | Troca de amp/gabinete sem estalo | Pronto | Teste automático trocando o amp com o som tocando |
+| Visual realista: pedais com carcaça, knobs, footswitch, LED e cabos; amp como cabeçote; gabinete com tela | Pronto | Conferido em capturas de tela |
+| Clicar no pedal abre um editor com todos os controles (tipo, subdivisão, knobs) | Pronto | Conferido no app; precisa do seu teste com o mouse |
+| Presets de pedaleira: salvar, carregar e excluir a pedaleira inteira com amp, captura, IR e ajustes, em Documentos/Guitar Studio Pro/Pedaleiras | Pronto | Testes de salvar, ler, listar e excluir; salvar pela tela conferido (arquivo gerado com todos os ajustes) |
+| Afinador cromático (corta a saída enquanto está ligado) | Pronto | Testes com as 6 cordas (erro máximo 0,13 cent), cordas desafinadas (dentro de 1 cent), silêncio e ruído não mostram nota, saída mutada |
 | Gravação, mixer, reamp, música de referência | Fase 3 | |
-| Projetos/presets, instaladores assinados | Fase 4 | |
+| Projetos de gravação, instaladores assinados | Fase 4 | |
 
 ## Baixar e instalar
 

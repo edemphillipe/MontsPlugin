@@ -2,10 +2,12 @@
 
 #include "CaptureBrowser.h"
 #include "PedalboardView.h"
+#include "TunerDisplay.h"
 #include "LookAndFeel.h"
 #include "Widgets.h"
 
 #include "engine/SignalChain.h"
+#include "presets/PresetStore.h"
 
 #include <juce_audio_devices/juce_audio_devices.h>
 #include <juce_audio_utils/juce_audio_utils.h>
@@ -53,6 +55,15 @@ private:
     void updateAmpControls();
     void updateAmpTile();
 
+    // whole-board presets
+    juce::var ampStateVar() const;
+    void applyAmpState (const juce::var&);
+    juce::var boardStateVar() const;        // everything a preset stores
+    void applyBoardState (const juce::var&);
+    void refreshPresetList (const juce::String& select = {});
+    void savePresetAs();
+    void deleteCurrentPreset();
+
     juce::PropertiesFile& settings;
     StudioLookAndFeel lookAndFeel;
 
@@ -67,6 +78,16 @@ private:
     juce::TextButton audioButton { gsp::ui::utf8 ("Configurar áudio") };
     juce::ComboBox inputSelect;
     juce::TextButton tapButton { "TAP" };
+    juce::ComboBox presetSelect;
+    juce::TextButton savePresetButton { "Salvar" }, deletePresetButton { "Excluir" };
+    TunerDisplay tuner;
+    PitchDetector pitchDetector;
+    std::vector<float> tunerBuffer;
+    int tunerCountdown = 0;
+    PresetStore presets { juce::File::getSpecialLocation (juce::File::userDocumentsDirectory)
+                              .getChildFile ("Guitar Studio Pro").getChildFile ("Pedaleiras") };
+    real::ChickenHeadLook chickenLook;
+    real::PedalKnobLook pedalKnobLook;
     juce::Label bpmLabel;
     TapTempo tapTempo;
 
