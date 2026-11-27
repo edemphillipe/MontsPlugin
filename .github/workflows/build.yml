@@ -1,0 +1,73 @@
+name: Build
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: build-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: ${{ matrix.name }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: macOS (Apple Silicon + Intel)
+            os: macos-14
+            artifact: GuitarStudioPro-macOS
+          - name: Windows (x64)
+            os: windows-latest
+            artifact: GuitarStudioPro-Windows
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Cache dependencies
+        uses: actions/cache@v4
+        with:
+          path: build/_deps
+          key: deps-${{ matrix.os }}-${{ hashFiles('cmake/Dependencies.cmake') }}
+
+      - name: Configure
+        run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
+
+      - name: Build
+        run: cmake --build build --config Release --parallel 4
+
+      - name: Test (NAM, AIDA-X, resampler, signal chain)
+        run: ctest --test-dir build -C Release --output-on-failure
+
+      - name: Package macOS (.dmg)
+        if: runner.os == 'macOS'
+        run: |
+          APP=$(find build/src/app -name "Guitar Studio Pro.app" -maxdepth 4 | head -1)
+          lipo -info "$APP/Contents/MacOS/Guitar Studio Pro"
+          mkdir -p dist/dmg
+          cp -R "$APP" dist/dmg/
+          ln -s /Applications dist/dmg/Applications
+          cp docs/INSTALACAO.md dist/dmg/LEIA-ME.md
+          hdiutil create -volname "Guitar Studio Pro" -srcfolder dist/dmg -ov -format UDZO "dist/GuitarStudioPro-${{ github.sha }}.dmg"
+
+      - name: Package Windows (.zip)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $exe = Get-ChildItem -Recurse build/src/app -Filter "Guitar Studio Pro.exe" | Select-Object -First 1
+          New-Item -ItemType Directory -Force dist/GuitarStudioPro | Out-Null
+          Copy-Item $exe.FullName dist/GuitarStudioPro/
+          Copy-Item docs/INSTALACAO.md dist/GuitarStudioPro/LEIA-ME.md
+          Compress-Archive -Path dist/GuitarStudioPro/* -DestinationPath "dist/GuitarStudioPro-${{ github.sha }}.zip"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact }}
+          path: |
+            dist/*.dmg
+            dist/*.zip
+          if-no-files-found: error
