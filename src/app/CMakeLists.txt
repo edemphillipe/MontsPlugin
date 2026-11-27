@@ -6,7 +6,8 @@ juce_add_gui_app(GuitarStudioPro
     MICROPHONE_PERMISSION_ENABLED TRUE
     MICROPHONE_PERMISSION_TEXT  "O Guitar Studio Pro precisa da entrada de audio para receber o sinal da sua guitarra."
     HARDENED_RUNTIME_ENABLED    TRUE
-    HARDENED_RUNTIME_OPTIONS    com.apple.security.device.audio-input)
+    HARDENED_RUNTIME_OPTIONS    com.apple.security.device.audio-input
+    ICON_BIG                    "${CMAKE_SOURCE_DIR}/resources/icon.png")
 
 target_sources(GuitarStudioPro PRIVATE
     Main.cpp
