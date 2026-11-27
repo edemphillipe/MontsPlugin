@@ -50,6 +50,8 @@ private:
     void showError (const juce::String& title, const juce::String& message);
     void saveState();
     void restoreState();
+    void updateAmpControls();
+    void updateAmpTile();
 
     juce::PropertiesFile& settings;
     StudioLookAndFeel lookAndFeel;
@@ -69,8 +71,8 @@ private:
     TapTempo tapTempo;
 
     // modules
-    ModulePanel inputPanel { "ENTRADA", false }, gatePanel { "NOISE GATE" }, capturePanel { "CAPTURA  NAM / AIDA-X" },
-                cabPanel { "GABINETE  IR" }, eqPanel { "EQUALIZADOR", false }, outputPanel { gsp::ui::utf8 ("SAÍDA"), false };
+    ModulePanel inputPanel { "ENTRADA", false }, gatePanel { "NOISE GATE" }, capturePanel { "AMP" },
+                cabPanel { "GABINETE" }, eqPanel { "EQUALIZADOR", false }, outputPanel { gsp::ui::utf8 ("SAÍDA"), false };
 
     Knob inputGain { "GANHO", -24.0, 24.0, 0.0, " dB" };
     Meter inputMeter;
@@ -81,8 +83,19 @@ private:
     juce::ToggleButton normalise { "Normalizar volume" };
     Knob aidaKnob1 { "PARAM 1", 0.0, 1.0, 0.5, "" }, aidaKnob2 { "PARAM 2", 0.0, 1.0, 0.5, "" };
 
+    // built-in amp
+    juce::ComboBox ampSourceSelect, voicingSelect;
+    juce::Label voicingInfo;
+    Knob ampGain { "GAIN", 0.0, 10.0, 5.0, "" }, ampVolume { "VOLUME", 0.0, 10.0, 5.0, "" },
+         ampBass { "BASS", 0.0, 10.0, 5.0, "" }, ampMiddle { "MIDDLE", 0.0, 10.0, 5.0, "" },
+         ampTreble { "TREBLE", 0.0, 10.0, 5.0, "" }, ampPresence { "PRESENCE", 0.0, 10.0, 5.0, "" },
+         ampMaster { "MASTER", 0.0, 10.0, 5.0, "" };
+
     juce::TextButton loadIrButton { "Carregar IR..." }, clearIrButton { "Remover" };
     juce::Label irName;
+    juce::ComboBox cabModeSelect, cabTypeSelect, micSelect;
+    Knob micPosition { gsp::ui::utf8 ("POSIÇÃO"), 0.0, 100.0, 30.0, " %" },
+         micDistance { gsp::ui::utf8 ("DISTÂNCIA"), 0.0, 100.0, 10.0, " %" };
 
     Knob bass { "GRAVES", -12.0, 12.0, 0.0, " dB" }, middle { gsp::ui::utf8 ("MÉDIOS"), -12.0, 12.0, 0.0, " dB" },
          treble { "AGUDOS", -12.0, 12.0, 0.0, " dB" };
@@ -95,6 +108,7 @@ private:
 
     std::unique_ptr<juce::FileChooser> chooser;
     juce::File currentCaptureFile, currentIrFile;
+    bool restoring = false;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (MainComponent)
 };

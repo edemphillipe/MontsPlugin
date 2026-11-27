@@ -20,7 +20,7 @@ add_library(gsp_reference_aida STATIC reference/ReferenceAida.cpp)
 target_link_libraries(gsp_reference_aida PRIVATE RTNeural)
 
 juce_add_console_app(gsp_tests PRODUCT_NAME "gsp_tests")
-target_sources(gsp_tests PRIVATE CoreTests.cpp EffectTests.cpp)
+target_sources(gsp_tests PRIVATE CoreTests.cpp EffectTests.cpp AmpTests.cpp)
 target_include_directories(gsp_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 target_compile_definitions(gsp_tests PRIVATE
     GSP_NAM_EXAMPLES="${GSP_NAM_EXAMPLE_MODELS}"

@@ -34,6 +34,10 @@ void SignalChain::prepare (double newSampleRate, int maxBlockSize)
 
     cabinet.prepare ({ sampleRate, (juce::uint32) maxBlock, 1 });
     cabinet.reset();
+    ampModel.prepare (sampleRate, maxBlock);
+    cabinetSim.prepare (sampleRate);
+    pathFade = PathFade();
+    pathFade.step = (float) (1.0 / (0.01 * sampleRate)); // 10 ms out + 10 ms in when the amp/cabinet changes
 
     bass.reset(); middle.reset(); treble.reset();
     lastBass = lastMiddle = lastTreble = 1000.0f; // force coefficient update
@@ -137,7 +141,64 @@ void SignalChain::process (const float* monoIn, float* const* outputs, int numOu
             juce::FloatVectorOperations::copy (outputs[c], (c % 2 == 0) ? x : right, numSamples);
 }
 
+namespace
+{
+// everything that changes the AMP block's signal path, packed into one key
+constexpr int packPath (int source, int voicing, int cabinetFile, int cab, int mic) noexcept
+{
+    return source | (voicing << 2) | (cabinetFile << 7) | (cab << 8) | (mic << 13);
+}
+} // namespace
+
 void SignalChain::processAmp (float* x, int numSamples) noexcept
+{
+    const int source = ampSource.load (std::memory_order_relaxed) == sourceAmpModel ? 1 : 0;
+    const int cabinetFile = (cabinetMode.load (std::memory_order_relaxed) == cabinetImpulseResponse
+                             && irLoaded.load (std::memory_order_acquire)) ? 1 : 0;
+    const int desired = packPath (source, juce::jlimit (0, 31, ampModel.voicingIndex.load (std::memory_order_relaxed)), cabinetFile,
+                                  juce::jlimit (0, 31, cabinetSim.cabinetIndex.load (std::memory_order_relaxed)),
+                                  juce::jlimit (0, 31, cabinetSim.micIndex.load (std::memory_order_relaxed)));
+    const int key = pathFade.update (desired);
+    const int activeSource = key & 3, activeVoicing = (key >> 2) & 31, activeCabFile = (key >> 7) & 1,
+              activeCab = (key >> 8) & 31, activeMic = (key >> 13) & 31;
+
+    // ---- amp: capture or built-in model (the panel's on/off LED bypasses it)
+    if (activeSource == 0)
+        processCapture (x, numSamples);
+    else if (captureEnabled.load (std::memory_order_relaxed))
+        ampModel.process (x, numSamples, activeVoicing);
+
+    // ---- cabinet: IR file or simulation
+    if (irEnabled.load (std::memory_order_relaxed))
+    {
+        if (activeCabFile == 1)
+        {
+            float* channels[] = { x };
+            juce::dsp::AudioBlock<float> block (channels, 1, (size_t) numSamples);
+            cabinet.process (juce::dsp::ProcessContextReplacing<float> (block));
+        }
+        else
+        {
+            cabinetSim.process (x, numSamples, activeCab, activeMic);
+        }
+    }
+
+    // ---- EQ (64-bit biquads)
+    updateEq();
+    for (int i = 0; i < numSamples; ++i)
+        x[i] = treble.process (middle.process (bass.process (x[i])));
+
+    pathFade.apply (x, numSamples);
+    if (pathFade.swapDue())
+    {
+        const int previousSource = activeSource;
+        pathFade.swap();
+        if ((pathFade.active & 3) == 1 && previousSource != 1)
+            ampModel.reset();
+    }
+}
+
+void SignalChain::processCapture (float* x, int numSamples) noexcept
 {
     // ---- capture handover: fade out, swap, fade in
     const bool swapRequested = pending.load (std::memory_order_acquire) != nullptr || pendingIsClear.load();
@@ -189,20 +250,6 @@ void SignalChain::processAmp (float* x, int numSamples) noexcept
     {
         captureGain = normaliseLoudness.load (std::memory_order_relaxed) ? captureNormalisationGain (current) : 1.0f;
     }
-
-    // ---- cabinet IR
-    if (irLoaded.load (std::memory_order_acquire) && irEnabled.load (std::memory_order_relaxed))
-    {
-        float* channels[] = { x };
-        juce::dsp::AudioBlock<float> block (channels, 1, (size_t) numSamples);
-        cabinet.process (juce::dsp::ProcessContextReplacing<float> (block));
-    }
-
-    // ---- EQ (64-bit biquads)
-    updateEq();
-    for (int i = 0; i < numSamples; ++i)
-        x[i] = treble.process (middle.process (bass.process (x[i])));
-
 }
 
 bool SignalChain::loadCapture (const juce::File& file, juce::String& error)

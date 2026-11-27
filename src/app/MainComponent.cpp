@@ -86,6 +86,46 @@ MainComponent::MainComponent (juce::PropertiesFile& s) : settings (s)
     aidaKnob1.setVisible (false);
     aidaKnob2.setVisible (false);
 
+    // ---------------- built-in amp (same panel, chosen with the source selector)
+    ampSourceSelect.addItem ("Captura NAM / AIDA-X", 1);
+    ampSourceSelect.addItem ("Amplificador interno", 2);
+    ampSourceSelect.setSelectedId (1, juce::dontSendNotification);
+    ampSourceSelect.onChange = [this]
+    {
+        chain.ampSource = ampSourceSelect.getSelectedId() == 2 ? SignalChain::sourceAmpModel : SignalChain::sourceCapture;
+        updateAmpControls();
+        saveState();
+    };
+    capturePanel.addAndMakeVisible (ampSourceSelect);
+    for (int i = 0; i < amp::numVoicings(); ++i)
+        voicingSelect.addItem (utf8 (amp::voicing (i).name), i + 1);
+    voicingSelect.setSelectedId (chain.getAmp().voicingIndex.load() + 1, juce::dontSendNotification);
+    voicingSelect.onChange = [this]
+    {
+        chain.getAmp().voicingIndex = voicingSelect.getSelectedId() - 1;
+        updateAmpControls();
+        saveState();
+    };
+    capturePanel.addChildComponent (voicingSelect);
+    voicingInfo.setColour (juce::Label::textColourId, colours::textDim);
+    voicingInfo.setFont (juce::FontOptions (13.0f));
+    capturePanel.addChildComponent (voicingInfo);
+    auto bindAmpKnob = [this] (Knob& k, std::atomic<float>& target)
+    {
+        capturePanel.addChildComponent (k);
+        k.slider.setNumDecimalPlacesToDisplay (1);
+        k.slider.onValueChange = [&k, &target] { target = (float) k.slider.getValue(); };
+        k.slider.onDragEnd = [this] { saveState(); };
+    };
+    auto& a = chain.getAmp();
+    bindAmpKnob (ampGain, a.gain);
+    bindAmpKnob (ampVolume, a.volume);
+    bindAmpKnob (ampBass, a.bass);
+    bindAmpKnob (ampMiddle, a.middle);
+    bindAmpKnob (ampTreble, a.treble);
+    bindAmpKnob (ampPresence, a.presence);
+    bindAmpKnob (ampMaster, a.master);
+
     // ---------------- cabinet
     addAndMakeVisible (cabPanel);
     cabPanel.addAndMakeVisible (loadIrButton);
@@ -99,8 +139,36 @@ MainComponent::MainComponent (juce::PropertiesFile& s) : settings (s)
         chain.clearImpulseResponse();
         currentIrFile = juce::File();
         irName.setText ("Sem IR", juce::dontSendNotification);
+        saveState();
     };
     cabPanel.onBypassChanged = [this] (bool on) { chain.irEnabled = on; };
+
+    cabModeSelect.addItem ("Simulado (alto-falante + microfone)", 1);
+    cabModeSelect.addItem ("IR (arquivo .wav)", 2);
+    cabModeSelect.setSelectedId (1, juce::dontSendNotification);
+    cabModeSelect.onChange = [this]
+    {
+        chain.cabinetMode = cabModeSelect.getSelectedId() == 2 ? SignalChain::cabinetImpulseResponse : SignalChain::cabinetSimulated;
+        updateAmpControls();
+        saveState();
+    };
+    cabPanel.addAndMakeVisible (cabModeSelect);
+    for (int i = 0; i < amp::numCabinets(); ++i)
+        cabTypeSelect.addItem (utf8 (amp::cabinet (i).name), i + 1);
+    for (int i = 0; i < amp::numMics(); ++i)
+        micSelect.addItem ("Microfone " + utf8 (amp::mic (i).name), i + 1);
+    cabTypeSelect.setSelectedId (chain.getCabinet().cabinetIndex.load() + 1, juce::dontSendNotification);
+    micSelect.setSelectedId (chain.getCabinet().micIndex.load() + 1, juce::dontSendNotification);
+    cabTypeSelect.onChange = [this] { chain.getCabinet().cabinetIndex = cabTypeSelect.getSelectedId() - 1; saveState(); };
+    micSelect.onChange = [this] { chain.getCabinet().micIndex = micSelect.getSelectedId() - 1; saveState(); };
+    micPosition.slider.onValueChange = [this] { chain.getCabinet().position = (float) micPosition.slider.getValue() / 100.0f; };
+    micDistance.slider.onValueChange = [this] { chain.getCabinet().distance = (float) micDistance.slider.getValue() / 100.0f; };
+    micPosition.slider.onDragEnd = [this] { saveState(); };
+    micDistance.slider.onDragEnd = [this] { saveState(); };
+    micPosition.slider.setTooltip (utf8 ("0% = centro do cone (mais brilho), 100% = borda (mais escuro)"));
+    micDistance.slider.setTooltip (utf8 ("0% = colado na tela, 100% = afastado (menos graves, reflexão do chão)"));
+    for (juce::Component* c : std::initializer_list<juce::Component*> { &cabTypeSelect, &micSelect, &micPosition, &micDistance })
+        cabPanel.addChildComponent (c);
 
     // ---------------- eq
     addAndMakeVisible (eqPanel);
@@ -134,7 +202,7 @@ MainComponent::MainComponent (juce::PropertiesFile& s) : settings (s)
     refreshInputChoices();
     updateDeviceLabel();
 
-    setSize (1280, 940);
+    setSize (1400, 960);
     startTimerHz (30);
 }
 
@@ -267,13 +335,15 @@ void MainComponent::resized()
     const int gap = 14;
     auto take = [&] (int w) { auto b = chainRow.removeFromLeft (w); chainRow.removeFromLeft (gap); return b; };
 
-    inputPanel.setBounds (take (120));
-    gatePanel.setBounds (take (130));
-    capturePanel.setBounds (take (350));
-    cabPanel.setBounds (take (190));
-    outputPanel.setBounds (chainRow.removeFromRight (120));
+    inputPanel.setBounds (take (110));
+    gatePanel.setBounds (take (124));
+    outputPanel.setBounds (chainRow.removeFromRight (110));
     chainRow.removeFromRight (gap);
-    eqPanel.setBounds (chainRow);
+    eqPanel.setBounds (chainRow.removeFromRight (200));
+    chainRow.removeFromRight (gap);
+    cabPanel.setBounds (chainRow.removeFromRight (250));
+    chainRow.removeFromRight (gap);
+    capturePanel.setBounds (chainRow);
 
     // panel contents
     {
@@ -287,6 +357,19 @@ void MainComponent::resized()
     }
     {
         auto b = capturePanel.getLocalBounds().reduced (12).withTrimmedTop (24);
+        auto sourceRow = b.removeFromTop (26);
+        ampSourceSelect.setBounds (sourceRow.removeFromLeft (210));
+        sourceRow.removeFromLeft (8);
+        voicingSelect.setBounds (sourceRow.removeFromLeft (220));
+        {
+            auto knobs = b;
+            voicingInfo.setBounds (knobs.removeFromTop (20));
+            knobs = knobs.withSizeKeepingCentre (knobs.getWidth(), juce::jmin (knobs.getHeight(), 112));
+            const int w = knobs.getWidth() / 7;
+            for (auto* k : { &ampGain, &ampVolume, &ampBass, &ampMiddle, &ampTreble, &ampPresence, &ampMaster })
+                k->setBounds (knobs.removeFromLeft (w).reduced (1, 0));
+        }
+        b.removeFromTop (8);
         auto top = b.removeFromTop (28);
         nextCapture.setBounds (top.removeFromRight (30));
         top.removeFromRight (4);
@@ -294,19 +377,31 @@ void MainComponent::resized()
         top.removeFromRight (8);
         loadCaptureButton.setBounds (top);
         b.removeFromTop (8);
-        captureName.setBounds (b.removeFromTop (24));
-        captureInfo.setBounds (b.removeFromTop (34));
-        normalise.setBounds (b.removeFromTop (24));
+        auto left = b.removeFromLeft (juce::jmin (b.getWidth(), 360));
+        captureName.setBounds (left.removeFromTop (24));
+        captureInfo.setBounds (left.removeFromTop (22));
+        normalise.setBounds (left.removeFromTop (24));
+        b.removeFromLeft (8);
         auto knobs = b.removeFromTop (100);
         aidaKnob1.setBounds (knobs.removeFromLeft (90));
         aidaKnob2.setBounds (knobs.removeFromLeft (90));
     }
     {
         auto b = cabPanel.getLocalBounds().reduced (12).withTrimmedTop (24);
-        loadIrButton.setBounds (b.removeFromTop (28));
-        b.removeFromTop (8);
-        irName.setBounds (b.removeFromTop (40));
-        clearIrButton.setBounds (b.removeFromTop (26).removeFromLeft (90));
+        cabModeSelect.setBounds (b.removeFromTop (26));
+        b.removeFromTop (6);
+        auto ir = b;
+        loadIrButton.setBounds (ir.removeFromTop (28));
+        ir.removeFromTop (6);
+        irName.setBounds (ir.removeFromTop (40));
+        clearIrButton.setBounds (ir.removeFromTop (26).removeFromLeft (90));
+        auto sim = b;
+        cabTypeSelect.setBounds (sim.removeFromTop (24));
+        sim.removeFromTop (4);
+        micSelect.setBounds (sim.removeFromTop (24));
+        sim.removeFromTop (2);
+        micPosition.setBounds (sim.removeFromLeft (sim.getWidth() / 2));
+        micDistance.setBounds (sim);
     }
     {
         auto b = eqPanel.getLocalBounds().reduced (10).withTrimmedTop (24);
@@ -427,10 +522,10 @@ void MainComponent::loadCapture (const juce::File& file)
     currentCaptureFile = file;
     captureName.setText (chain.getCaptureName(), juce::dontSendNotification);
     captureInfo.setText (chain.getCaptureDescription(), juce::dontSendNotification);
-    pedalboardView.setCaptureName (chain.getCaptureName());
-    aidaKnob1.setVisible (chain.getCaptureConditioningInputs() >= 1);
-    aidaKnob2.setVisible (chain.getCaptureConditioningInputs() >= 2);
     browser.highlight (file);
+    if (! restoring)
+        ampSourceSelect.setSelectedId (1, juce::sendNotificationSync); // loading a capture means: play the capture
+    updateAmpControls();
     saveState();
 }
 
@@ -444,6 +539,8 @@ void MainComponent::loadImpulseResponse (const juce::File& file)
     }
     currentIrFile = file;
     irName.setText (chain.getImpulseResponseName(), juce::dontSendNotification);
+    if (! restoring)
+        cabModeSelect.setSelectedId (2, juce::sendNotificationSync);
     saveState();
 }
 
@@ -455,6 +552,8 @@ void MainComponent::showError (const juce::String& title, const juce::String& me
 // ======================================================================= state
 void MainComponent::saveState()
 {
+    if (restoring)
+        return; // restoreState() is still applying the saved values
     if (auto xml = deviceManager.createStateXml())
         settings.setValue ("audioDevice", xml.get());
     settings.setValue ("inputChannel", inputChannel.load());
@@ -473,11 +572,30 @@ void MainComponent::saveState()
     settings.setValue ("treble", treble.slider.getValue());
     settings.setValue ("outputGain", outputGain.slider.getValue());
     settings.setValue ("pedalboard", juce::JSON::toString (chain.getPedalboard().toVar(), true));
+
+    auto& a = chain.getAmp();
+    auto* ampState = new juce::DynamicObject();
+    ampState->setProperty ("source", ampSourceSelect.getSelectedId() == 2 ? "amp" : "capture");
+    ampState->setProperty ("model", amp::voicing (a.voicingIndex.load()).id);
+    ampState->setProperty ("gain", ampGain.slider.getValue());
+    ampState->setProperty ("volume", ampVolume.slider.getValue());
+    ampState->setProperty ("bass", ampBass.slider.getValue());
+    ampState->setProperty ("middle", ampMiddle.slider.getValue());
+    ampState->setProperty ("treble", ampTreble.slider.getValue());
+    ampState->setProperty ("presence", ampPresence.slider.getValue());
+    ampState->setProperty ("master", ampMaster.slider.getValue());
+    ampState->setProperty ("cabinetMode", cabModeSelect.getSelectedId() == 2 ? "ir" : "simulated");
+    ampState->setProperty ("cabinet", amp::cabinet (chain.getCabinet().cabinetIndex.load()).id);
+    ampState->setProperty ("mic", amp::mic (chain.getCabinet().micIndex.load()).id);
+    ampState->setProperty ("micPosition", micPosition.slider.getValue());
+    ampState->setProperty ("micDistance", micDistance.slider.getValue());
+    settings.setValue ("amp", juce::JSON::toString (juce::var (ampState), true));
     settings.saveIfNeeded();
 }
 
 void MainComponent::restoreState()
 {
+    const juce::ScopedValueSetter<bool> restoringScope (restoring, true);
     auto restoreKnob = [this] (Knob& k, const char* key)
     {
         if (settings.containsKey (key))
@@ -520,6 +638,69 @@ void MainComponent::restoreState()
     const juce::File ir (settings.getValue ("ir"));
     if (ir.existsAsFile())
         loadImpulseResponse (ir);
+
+    const auto ampState = juce::JSON::parse (settings.getValue ("amp"));
+    if (ampState.isObject())
+    {
+        auto num = [&] (const char* key, Knob& k)
+        {
+            if (ampState.hasProperty (key))
+                k.slider.setValue ((double) ampState[key], juce::sendNotificationSync);
+        };
+        num ("gain", ampGain); num ("volume", ampVolume); num ("bass", ampBass); num ("middle", ampMiddle);
+        num ("treble", ampTreble); num ("presence", ampPresence); num ("master", ampMaster);
+        num ("micPosition", micPosition); num ("micDistance", micDistance);
+        const int v = amp::voicingIndexForId (ampState["model"].toString());
+        if (v >= 0) voicingSelect.setSelectedId (v + 1, juce::sendNotificationSync);
+        const int c = amp::cabinetIndexForId (ampState["cabinet"].toString().toRawUTF8());
+        if (c >= 0) cabTypeSelect.setSelectedId (c + 1, juce::sendNotificationSync);
+        const int m = amp::micIndexForId (ampState["mic"].toString().toRawUTF8());
+        if (m >= 0) micSelect.setSelectedId (m + 1, juce::sendNotificationSync);
+        ampSourceSelect.setSelectedId (ampState["source"].toString() == "amp" ? 2 : 1, juce::sendNotificationSync);
+        cabModeSelect.setSelectedId (ampState["cabinetMode"].toString() == "ir" ? 2 : 1, juce::sendNotificationSync);
+    }
+    else
+    {
+        // first start, or settings from Phase 1: an IR that was in use stays in use
+        cabModeSelect.setSelectedId (currentIrFile.existsAsFile() ? 2 : 1, juce::sendNotificationSync);
+        for (auto* k : { &ampGain, &ampVolume, &ampBass, &ampMiddle, &ampTreble, &ampPresence, &ampMaster, &micPosition, &micDistance })
+            k->slider.setValue (k->slider.getValue(), juce::sendNotificationSync);
+    }
+    updateAmpControls();
+}
+
+void MainComponent::updateAmpControls()
+{
+    const bool model = ampSourceSelect.getSelectedId() == 2;
+    for (juce::Component* c : std::initializer_list<juce::Component*> { &voicingSelect, &voicingInfo, &ampGain, &ampVolume, &ampBass,
+                                                                        &ampMiddle, &ampTreble, &ampPresence, &ampMaster })
+        c->setVisible (model);
+    for (juce::Component* c : std::initializer_list<juce::Component*> { &loadCaptureButton, &prevCapture, &nextCapture, &captureName,
+                                                                        &captureInfo, &normalise })
+        c->setVisible (! model);
+    aidaKnob1.setVisible (! model && chain.getCaptureConditioningInputs() >= 1);
+    aidaKnob2.setVisible (! model && chain.getCaptureConditioningInputs() >= 2);
+    voicingInfo.setText (utf8 (amp::voicing (voicingSelect.getSelectedId() - 1).description), juce::dontSendNotification);
+
+    const bool irMode = cabModeSelect.getSelectedId() == 2;
+    for (juce::Component* c : std::initializer_list<juce::Component*> { &loadIrButton, &irName, &clearIrButton })
+        c->setVisible (irMode);
+    for (juce::Component* c : std::initializer_list<juce::Component*> { &cabTypeSelect, &micSelect, &micPosition, &micDistance })
+        c->setVisible (! irMode);
+    if (irMode && ! chain.hasImpulseResponse())
+        irName.setText (utf8 ("Sem IR: carregue um arquivo (até lá o gabinete simulado é usado)"), juce::dontSendNotification);
+    updateAmpTile();
+}
+
+void MainComponent::updateAmpTile()
+{
+    const bool model = ampSourceSelect.getSelectedId() == 2;
+    juce::String text = model ? utf8 (amp::voicing (voicingSelect.getSelectedId() - 1).name) : chain.getCaptureName();
+    if (cabModeSelect.getSelectedId() == 2 && chain.hasImpulseResponse())
+        text << "\n" << chain.getImpulseResponseName();
+    else
+        text << "\n" << utf8 (amp::cabinet (cabTypeSelect.getSelectedId() - 1).name);
+    pedalboardView.setCaptureName (text);
 }
 
 } // namespace gsp::ui

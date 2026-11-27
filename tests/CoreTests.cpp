@@ -244,6 +244,7 @@ void testSignalChainSwap()
 } // namespace
 
 void runEffectTests(); // EffectTests.cpp
+void runAmpTests();    // AmpTests.cpp
 
 int main()
 {
@@ -255,6 +256,7 @@ int main()
     runTest ("Noise gate", testGate);
     runTest ("Signal chain: resampling, capture swap, clear", testSignalChainSwap);
     runEffectTests();
+    runAmpTests();
 
     std::printf ("\n%d checks, %d failures, %d skipped\n", checks, failures, skipped);
     return failures == 0 ? 0 : 1;

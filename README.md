@@ -21,8 +21,11 @@ Estúdio de guitarra **standalone** (não precisa de DAW) para **macOS** e **Win
 | Reverb estéreo: Hall, Plate, Room, Spring, Ambient, Cloud, Shimmer | Pronto | T60 medido acompanha o knob Decay, cauda estéreo descorrelacionada, Shimmer estável (testes) |
 | Tap tempo (botão TAP ou tecla T) e subdivisões (1/4, 1/8, pontuadas, tercinas) | Pronto | Teste do cálculo de BPM e do reset após pausa |
 | Arrastar pedais para mudar a ordem, inclusive antes/depois do amp | Pronto | Mudar, salvar e restaurar a ordem: teste automático. A pedaleira foi conferida em captura de tela; o arrastar com o mouse precisa do seu teste |
-| Uso de CPU com todos os pedais ligados | Medido | 4,7% de um núcleo nesta máquina de testes (48 kHz, buffer 64) |
-| Amplificadores próprios (Gain/Volume/Bass/Mid/Treble/Presence/Master), gabinete e microfone | Fase 2 (próximo PR) | Ainda não existe |
+| Uso de CPU com todos os pedais ligados | Medido | 4,6% de um núcleo nesta máquina de testes (48 kHz, buffer 64) |
+| Uso de CPU do amp mais pesado + gabinete | Medido | 5,5% de um núcleo nesta máquina de testes (48 kHz, buffer 64) |
+| 6 amplificadores próprios (Americano Limpo, Brit Crunch, Chime Classe A, Brit Espesso, Lead Hot-Rod, Moderno Alto Ganho) com GAIN, VOLUME, BASS, MIDDLE, TREBLE, PRESENCE, MASTER | Pronto | Tone stack: equações do circuito conferidas com uma solução numérica independente (diferença 0,0001 dB) e o filtro digital com as equações (0,05 dB). GAIN aumenta a distorção em todos; volumes calibrados para -18 dBFS RMS com knobs em 5. Precisa do seu teste de ouvido |
+| Simulação de gabinete (5 caixas) e microfone (dinâmico, fita, condensador) com posição e distância | Pronto | Modelo por filtros (não é IR medido). Testes: corte de agudos do alto-falante, posição escurece o som na borda, distância reduz o grave de proximidade. Para um gabinete real específico, use um IR |
+| Troca de amp/gabinete sem estalo | Pronto | Teste automático trocando o amp com o som tocando |
 | Gravação, mixer, reamp, música de referência | Fase 3 | |
 | Projetos/presets, instaladores assinados | Fase 4 | |
 
