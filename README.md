@@ -20,7 +20,7 @@ Estúdio de guitarra **standalone** (não precisa de DAW) para **macOS** e **Win
 | Delay estéreo: Digital, Analógico, Fita, Reverso, Ping-pong, Modulado | Pronto | Posição do eco medida em teste, livre e sincronizado ao TAP (erro até 3 amostras) |
 | Reverb estéreo: Hall, Plate, Room, Spring, Ambient, Cloud, Shimmer | Pronto | T60 medido acompanha o knob Decay, cauda estéreo descorrelacionada, Shimmer estável (testes) |
 | Tap tempo (botão TAP ou tecla T) e subdivisões (1/4, 1/8, pontuadas, tercinas) | Pronto | Teste do cálculo de BPM e do reset após pausa |
-| Arrastar pedais para mudar a ordem, inclusive antes/depois do amp | Pronto | Testado na interface; ordem salva e restaurada |
+| Arrastar pedais para mudar a ordem, inclusive antes/depois do amp | Pronto | Mudar, salvar e restaurar a ordem: teste automático. A pedaleira foi conferida em captura de tela; o arrastar com o mouse precisa do seu teste |
 | Uso de CPU com todos os pedais ligados | Medido | 4,7% de um núcleo nesta máquina de testes (48 kHz, buffer 64) |
 | Amplificadores próprios (Gain/Volume/Bass/Mid/Treble/Presence/Master), gabinete e microfone | Fase 2 (próximo PR) | Ainda não existe |
 | Gravação, mixer, reamp, música de referência | Fase 3 | |
