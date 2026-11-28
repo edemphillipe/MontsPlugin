@@ -67,7 +67,7 @@ PedalEditor::PedalEditor (fx::Effect& effect, const PedalStyle& st, std::functio
             for (int k = 0; k < (int) p.choices.size(); ++k)
                 c.box->addItem (utf8 (p.choices[(size_t) k].c_str()), k + 1);
             c.box->setSelectedId (fx.choice (i) + 1, juce::dontSendNotification);
-            c.box->onChange = [this, i, b = c.box.get(), onChange] { fx.set (i, (float) (b->getSelectedId() - 1)); onChange(); };
+            c.box->onChange = [this, i, b = c.box.get(), onChange] { fx.setFromUser (i, (float) (b->getSelectedId() - 1)); refreshControls(); onChange(); };
             addAndMakeVisible (*c.box);
         }
         else
@@ -79,7 +79,7 @@ PedalEditor::PedalEditor (fx::Effect& effect, const PedalStyle& st, std::functio
             c.slider->setColour (juce::Slider::textBoxOutlineColourId, juce::Colours::transparentBlack);
             c.slider->getProperties().set ("cap", style.cap);
             c.slider->setLookAndFeel (&knobLook);
-            c.slider->onValueChange = [this, i, s = c.slider.get(), onChange] { fx.set (i, (float) s->getValue()); onChange(); };
+            c.slider->onValueChange = [this, i, s = c.slider.get(), onChange] { fx.setFromUser (i, (float) s->getValue()); refreshControls(); onChange(); };
             addAndMakeVisible (*c.slider);
         }
         controls.push_back (std::move (c));
@@ -89,6 +89,17 @@ PedalEditor::PedalEditor (fx::Effect& effect, const PedalStyle& st, std::functio
     const int cols = juce::jmin (5, juce::jmax (3, knobCount));
     const int rows = (knobCount + cols - 1) / cols;
     setSize (cols * 92 + 32, 70 + ((boxes + 1) / 2) * 44 + rows * 112 + 28);
+}
+
+void PedalEditor::refreshControls()
+{
+    for (auto& c : controls)
+    {
+        if (c.slider != nullptr)
+            c.slider->setValue (fx.get (c.param), juce::dontSendNotification);
+        if (c.box != nullptr)
+            c.box->setSelectedId (fx.choice (c.param) + 1, juce::dontSendNotification);
+    }
 }
 
 PedalEditor::~PedalEditor()
@@ -154,7 +165,7 @@ PedalComponent::PedalComponent (fx::Effect& effect, int index)
         k.slider->setPopupDisplayEnabled (true, true, this);
         k.slider->getProperties().set ("cap", style.cap);
         k.slider->setLookAndFeel (&knobLook);
-        k.slider->onValueChange = [this, i, s = k.slider.get()] { fx.set (i, (float) s->getValue()); };
+        k.slider->onValueChange = [this, i, s = k.slider.get()] { fx.setFromUser (i, (float) s->getValue()); refreshFromEffect(); };
         k.slider->onDragEnd = [this] { if (onChanged) onChanged(); };
         addAndMakeVisible (*k.slider);
         knobs.push_back (std::move (k));
@@ -192,6 +203,9 @@ juce::String PedalComponent::modeText() const
         extra = "L " + utf8 (names[(size_t) fx.choice (fx.indexOf ("voiceL"))].c_str()).toUpperCase()
               + " / R " + utf8 (names[(size_t) fx.choice (fx.indexOf ("voiceR"))].c_str()).toUpperCase();
     }
+    const int link = fx.indexOf ("link");
+    if (link >= 0 && fx.choice (link) == 1)
+        extra << utf8 (" · LINK");
     const int sync = fx.indexOf ("sync");
     if (sync >= 0 && fx.choice (sync) == 1)
         extra << (extra.isEmpty() ? "" : utf8 (" · ")) << "TAP";

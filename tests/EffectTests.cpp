@@ -557,6 +557,45 @@ void testOrderAndPresets()
     }
 }
 
+
+void testDualDelayLink()
+{
+    gsp::fx::DualDelay d;
+    const int fbL = d.indexOf ("feedbackL"), fbR = d.indexOf ("feedbackR"), lvL = d.indexOf ("levelL"), lvR = d.indexOf ("levelR");
+    const int link = d.indexOf ("link");
+    CHECK (link >= 0 && d.numParams() <= 16, "link param");
+    d.setFromUser (fbL, 0.2f);
+    d.setFromUser (fbR, 0.7f);
+    CHECK (std::abs (d.get (fbL) - 0.2f) < 1e-6f && std::abs (d.get (fbR) - 0.7f) < 1e-6f, "separate by default");
+    d.setFromUser (link, 1.0f); // switching LINK on: R takes L's values
+    CHECK (std::abs (d.get (fbR) - 0.2f) < 1e-6f && std::abs (d.get (lvR) - d.get (lvL)) < 1e-6f, "R follows L when linked");
+    d.setFromUser (fbR, 0.55f); // moving either side moves both
+    d.setFromUser (lvL, 0.8f);
+    CHECK (std::abs (d.get (fbL) - 0.55f) < 1e-6f && std::abs (d.get (lvR) - 0.8f) < 1e-6f, "linked knobs move together");
+    d.setFromUser (link, 0.0f);
+    d.setFromUser (fbL, 0.1f);
+    CHECK (std::abs (d.get (fbR) - 0.55f) < 1e-6f, "unlinked again");
+
+    // the sound: with LINK on, R repeats like L even if its own knob was left elsewhere
+    gsp::fx::DualDelay a;
+    a.enabled = true;
+    a.set ("timeL", 100.0f);
+    a.set ("timeR", 100.0f);
+    a.set ("feedbackL", 0.6f);
+    a.set ("feedbackR", 0.0f);
+    a.set ("voiceR", 0.0f); // same voice on both sides for a fair comparison
+    a.set ("mod", 0.0f);
+    a.set ("link", 1.0f);
+    a.prepare (fs, block);
+    const auto out = run (a, impulse ((int) fs / 2));
+    const double l3 = std::abs (out.l[(size_t) (fs * 0.3)]), r3 = std::abs (out.r[(size_t) (fs * 0.3)]);
+    double lE = 0, rE = 0;
+    for (size_t i = (size_t) (fs * 0.25); i < (size_t) (fs * 0.45); ++i) { lE += out.l[i] * out.l[i]; rE += out.r[i] * out.r[i]; }
+    std::printf ("  LINK: energy of the 3rd/4th repeats L %.3g, R %.3g\n", lE, rE);
+    juce::ignoreUnused (l3, r3);
+    CHECK (rE > 0.5 * lE && lE > 1e-6, "R does not repeat like L when linked");
+}
+
 void testDualDelay()
 {
     auto d = make<gsp::fx::DualDelay>();
@@ -667,6 +706,7 @@ void runEffectTests()
     runTest ("Pedals: on/off switching without clicks", testSwitchingIsClickFree);
     runTest ("Delay: time and TAP sync", testDelayTiming);
     runTest ("Dual delay: independent L/R time, tone, cross, stability", testDualDelay);
+    runTest ("Dual delay: LINK repeats and level", testDualDelayLink);
     runTest ("Delay: ping pong alternates sides", testPingPong);
     runTest ("Delay: reverse", testReverseDelay);
     runTest ("Reverb: decay time and stereo", testReverbDecay);

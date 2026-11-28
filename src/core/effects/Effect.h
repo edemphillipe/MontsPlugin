@@ -15,6 +15,7 @@
 #include <cmath>
 #include <memory>
 #include <string>
+#include <utility>
 #include <vector>
 
 namespace gsp::fx
@@ -95,6 +96,21 @@ public:
     }
     void set (const std::string& id, float v) noexcept { const int i = indexOf (id); if (i >= 0) set (i, v); }
     int choice (int index) const noexcept { return (int) std::lround (get (index)); }
+
+    // Pairs of parameters that currently move together (e.g. a LINK switch). Empty by default.
+    virtual std::vector<std::pair<int, int>> linkedParams() const { return {}; }
+    // Set from a knob or selector in the UI: linked partners follow. Changing anything else
+    // (such as switching LINK on) brings each right-hand partner to its left-hand value.
+    void setFromUser (int index, float v)
+    {
+        set (index, v);
+        for (const auto& [a, b] : linkedParams())
+        {
+            if (index == a) set (b, get (a));
+            else if (index == b) set (a, get (b));
+            else set (b, get (a));
+        }
+    }
 
     std::atomic<bool> enabled { true };
 

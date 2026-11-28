@@ -37,6 +37,7 @@ public:
     ~PedalEditor() override;
     void paint (juce::Graphics&) override;
     void resized() override;
+    void refreshControls();
 
 private:
     struct Control
