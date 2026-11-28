@@ -35,7 +35,7 @@ MainComponent::MainComponent (juce::PropertiesFile& s) : settings (s)
     inputSelect.onChange = [this] { inputChannel.store (juce::jmax (0, inputSelect.getSelectedId() - 1)); };
     addAndMakeVisible (inputSelect);
 
-    tapButton.setTooltip ("Toque no ritmo (ou aperte T) para definir o BPM dos delays e modulações");
+    tapButton.setTooltip (juce::String::fromUTF8 ("Toque no ritmo (ou aperte T) para definir o BPM dos delays e modulações"));
     tapButton.onClick = [this] { tap(); };
     tapButton.setColour (juce::TextButton::buttonColourId, colours::accent.darker (0.3f));
     tapButton.setColour (juce::TextButton::textColourOffId, colours::background);
@@ -271,6 +271,13 @@ MainComponent::MainComponent (juce::PropertiesFile& s) : settings (s)
     studioTab.setTooltip (utf8 ("Gravação multipista, mixer, reamp e música de referência"));
     addChildComponent (studioView);
     studioView.checkAudio = [this] { return audioProblem(); };
+    studioProject.toneProvider = [this] { return boardStateVar(); };
+    studioView.onLoadTone = [this] (const juce::var& tone)
+    {
+        applyBoardState (tone);
+        presetSelect.setSelectedId (0, juce::dontSendNotification);
+        saveState();
+    };
     studioView.openInitialProject();
     showTab (settings.getBoolValue ("studioTab", false));
 

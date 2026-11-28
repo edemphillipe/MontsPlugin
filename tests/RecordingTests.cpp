@@ -413,6 +413,152 @@ void testLiveSoundUnchanged()
     CHECK (maxDiff < 1.0e-6 && rms (dl) > 0.01, "studio changes the live sound (%g)", maxDiff);
 }
 
+// play the project with a silent live input and return where the loudest sample of the
+// left channel is and how loud it is
+std::pair<int, float> playPeak (StudioEngine& engine, Project& project, int length)
+{
+    GainChain silent;
+    silent.left = silent.right = 0.0f;
+    project.seek (0);
+    project.play();
+    const auto [l, r] = runEngine (engine, silent, std::vector<float> ((size_t) length, 0.0f));
+    project.stop();
+    const int at = argmaxAbs (l);
+    return { at, l[(size_t) at] };
+}
+
+void testTakesAndTone()
+{
+    StudioEngine engine;
+    engine.prepare (fs, block);
+    Project project (engine, false);
+    juce::String err;
+    const auto dir = freshFolder ("gsp_rec_takes");
+    project.open (dir, err);
+
+    // the app hands over its whole board; here a stand-in "tone" that names the sound
+    juce::String toneName = "Clean";
+    project.toneProvider = [&]
+    {
+        auto* o = new juce::DynamicObject();
+        o->setProperty ("name", toneName);
+        return juce::var (o);
+    };
+
+    GainChain chain;
+    chain.left = chain.right = 0.5f;
+    CHECK (project.record (-1, err), "%s", err.toRawUTF8());
+    runEngine (engine, chain, impulseAt (8000, 1000));
+    project.stop();
+    {
+        const auto& t = project.session().tracks[0];
+        CHECK (t.tone["name"].toString() == "Clean", "take 1 keeps its tone (%s)", t.tone["name"].toString().toRawUTF8());
+        CHECK (t.takeLabel.startsWith (juce::String::fromUTF8 ("Gravação")) && t.history.empty(), "label '%s'", t.takeLabel.toRawUTF8());
+    }
+
+    // record over track 1 with another sound: the first take goes to the history
+    toneName = "Lead";
+    chain.left = chain.right = 0.25f;
+    project.seek (0);
+    CHECK (project.record (0, err), "%s", err.toRawUTF8());
+    runEngine (engine, chain, impulseAt (8000, 3000));
+    project.stop();
+    {
+        const auto& t = project.session().tracks[0];
+        CHECK (t.history.size() == 1 && t.history[0].tone["name"].toString() == "Clean", "first take in history");
+        CHECK (t.tone["name"].toString() == "Lead", "current take has the new tone");
+        if (t.history.size() == 1)
+            CHECK (project.fileFor (t.history[0].wetFile).existsAsFile() && project.fileFor (t.history[0].diFile).existsAsFile(), "old files kept");
+    }
+    auto [at2, v2] = playPeak (engine, project, 10000);
+    CHECK (at2 == 3000 && std::abs (v2 - 0.25f) < 1.0e-4f, "plays take 2: %d %g", at2, (double) v2);
+
+    // re-amp: the second take goes to the history too, the re-amp gets the sound in use
+    toneName = "Crunch";
+    chain.left = chain.right = 0.125f;
+    CHECK (project.reamp (0, err), "%s", err.toRawUTF8());
+    std::vector<float> l (block), r (block), z (block, 0.0f);
+    for (int b = 0; b < 5000 && ! engine.reachedEnd(); ++b)
+        engine.process (z.data(), l.data(), r.data(), block, chain);
+    project.poll();
+    {
+        const auto& t = project.session().tracks[0];
+        CHECK (t.history.size() == 2 && t.tone["name"].toString() == "Crunch" && t.takeLabel.startsWith ("Reamp"),
+               "reamp is a new take (%d in history, %s)", (int) t.history.size(), t.takeLabel.toRawUTF8());
+    }
+
+    // go back to the very first take: it plays again, the re-amp stays in the list
+    CHECK (project.useTake (0, 0), "useTake");
+    {
+        const auto& t = project.session().tracks[0];
+        CHECK (t.tone["name"].toString() == "Clean" && t.history.size() == 2, "first take back");
+        CHECK (! t.history.empty() && t.history.back().tone["name"].toString() == "Crunch", "re-amp went to the history");
+    }
+    auto [at1, v1] = playPeak (engine, project, 10000);
+    CHECK (at1 == 1000 && std::abs (v1 - 0.5f) < 1.0e-4f, "plays take 1 again: %d %g", at1, (double) v1);
+    CHECK (! project.useTake (0, 5) && ! project.useTake (3, 0), "bad indices refused");
+
+    // all of it survives closing and reopening
+    project.close();
+    CHECK (! project.isOpen(), "closed");
+    CHECK (project.open (dir, err), "%s", err.toRawUTF8());
+    {
+        const auto& t = project.session().tracks[0];
+        CHECK (t.tone["name"].toString() == "Clean" && t.history.size() == 2, "reopened: %d takes", (int) t.history.size());
+        if (t.history.size() == 2)
+            CHECK (t.history[0].tone["name"].toString() == "Lead" && t.history[1].wetFile.contains ("reamp"), "history order");
+    }
+    auto [at1b, v1b] = playPeak (engine, project, 10000);
+    CHECK (at1b == 1000, "reopened plays take 1 (%d)", at1b);
+}
+
+void testRenameAndTrash()
+{
+    StudioEngine engine;
+    engine.prepare (fs, block);
+    Project project (engine, false);
+    juce::String err;
+    const auto a = freshFolder ("gsp_rec_name_a");
+    const auto b = freshFolder ("gsp_rec_name_b");
+    const auto c = freshFolder (juce::String::fromUTF8 ("gsp_rec_name_ç").toRawUTF8());
+    project.open (a, err);
+    GainChain chain;
+    project.record (-1, err);
+    runEngine (engine, chain, impulseAt (6000, 500));
+    project.stop();
+    // reference music inside the project folder
+    const auto ref = a.getChildFile ("ref.wav");
+    {
+        std::unique_ptr<juce::OutputStream> os = std::make_unique<juce::FileOutputStream> (ref);
+        juce::WavAudioFormat wav;
+        auto w = wav.createWriterFor (os, juce::AudioFormatWriterOptions{}.withSampleRate (fs).withNumChannels (2).withBitsPerSample (24));
+        juce::AudioBuffer<float> buf (2, 4800);
+        buf.clear();
+        w->writeFromAudioSampleBuffer (buf, 0, buf.getNumSamples());
+    }
+    CHECK (project.setBacking (ref, err), "%s", err.toRawUTF8());
+    project.play(); // renaming while playing must stop and close the files first
+
+    CHECK (project.rename ("gsp_rec_name_b", err), "%s", err.toRawUTF8());
+    CHECK (project.getFolder() == b && ! a.exists() && b.getChildFile ("session.json").existsAsFile(), "folder renamed");
+    CHECK (project.session().tracks.size() == 1, "tracks kept");
+    CHECK (juce::File (project.session().backingFile) == b.getChildFile ("ref.wav"), "reference music moved with the project: %s",
+           project.session().backingFile.toRawUTF8());
+    CHECK (project.getLastNotice().isEmpty() || ! project.getLastNotice().contains ("encontrado"), "no missing-file notice");
+    auto [at, v] = playPeak (engine, project, 8000);
+    CHECK (at == 500, "plays after rename (%d)", at);
+
+    // a name that is taken is refused and nothing changes
+    c.createDirectory();
+    CHECK (! project.rename (juce::String::fromUTF8 ("gsp_rec_name_ç"), err) && err.isNotEmpty(), "existing name refused");
+    CHECK (project.getFolder() == b && project.isOpen(), "still open after refusal");
+    c.deleteRecursively();
+
+    const bool trashed = project.moveToTrash (err);
+    std::printf ("  move to trash: %s %s\n", trashed ? "ok" : "failed", err.toRawUTF8());
+    CHECK (trashed && ! b.exists() && ! project.isOpen(), "project in the trash");
+}
+
 } // namespace
 
 void runRecordingTests()
@@ -424,4 +570,6 @@ void runRecordingTests()
     runTest ("Recording: read-ahead playback from the middle", testBufferedPlayback);
     runTest ("Recording: session file", testSessionJson);
     runTest ("Recording: live sound unchanged through the studio", testLiveSoundUnchanged);
+    runTest ("Recording: take history and the tone of each take", testTakesAndTone);
+    runTest ("Recording: rename and delete a project", testRenameAndTrash);
 }

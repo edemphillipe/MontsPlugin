@@ -18,11 +18,30 @@
 namespace gsp::studio
 {
 
+// One take: the files plus the sound (whole pedalboard, amp, cabinet...) it was made with.
+struct TakeInfo
+{
+    juce::String diFile, wetFile;
+    double diStartSeconds = 0.0, wetStartSeconds = 0.0;
+    juce::var tone;      // board state when it was recorded / re-amped (void if unknown)
+    juce::String label;  // e.g. "Gravação 27/11 23:10"
+};
+
 struct TrackInfo
 {
     juce::String name;
     juce::String diFile, wetFile; // relative to the project folder
     double diStartSeconds = 0.0, wetStartSeconds = 0.0; // where each file starts on the timeline
+    juce::var tone;
+    juce::String takeLabel;
+    std::vector<TakeInfo> history; // earlier takes of this track, newest last
+
+    TakeInfo current() const { return { diFile, wetFile, diStartSeconds, wetStartSeconds, tone, takeLabel }; }
+    void setCurrent (const TakeInfo& t)
+    {
+        diFile = t.diFile; wetFile = t.wetFile; diStartSeconds = t.diStartSeconds; wetStartSeconds = t.wetStartSeconds;
+        tone = t.tone; takeLabel = t.label;
+    }
     float volumeDb = 0.0f, pan = 0.0f;
     bool mute = false, solo = false;
 };
@@ -50,6 +69,9 @@ public:
     ~Project();
 
     bool open (const juce::File& folder, juce::String& error); // creates it if needed
+    void close();                                                     // stop and release every file
+    bool rename (const juce::String& newName, juce::String& error);   // renames the folder, stays open
+    bool moveToTrash (juce::String& error);                           // the whole folder goes to the trash
     bool isOpen() const { return folder != juce::File(); }
     const juce::File& getFolder() const { return folder; }
     SessionInfo& session() { return info; }
@@ -68,6 +90,9 @@ public:
     void poll();                         // UI timer: finishes a re-amp that reached its end
 
     bool removeTrack (int track);
+    bool useTake (int track, int historyIndex); // make an earlier take the current one (the current goes to the history)
+    // the sound in use right now, stored with every new take (set by the app)
+    std::function<juce::var()> toneProvider;
     bool setBacking (const juce::File& file, juce::String& error);
     void clearBacking();
 
@@ -97,6 +122,8 @@ private:
     SessionInfo info;
     int latency = 0;
     juce::String pendingDi, pendingWet; // files of the take being recorded
+    juce::var pendingTone;
+    static juce::String takeLabelNow (const juce::String& kind);
     juce::String notice;
 };
 
