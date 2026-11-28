@@ -258,6 +258,22 @@ MainComponent::MainComponent (juce::PropertiesFile& s) : settings (s)
     refreshInputChoices();
     updateDeviceLabel();
 
+    // ---------------- recording studio
+    for (auto* b : { &boardTab, &studioTab })
+    {
+        b->setClickingTogglesState (true);
+        b->setRadioGroupId (4711);
+        b->setColour (juce::TextButton::buttonColourId, colours::panel);
+        addAndMakeVisible (b);
+    }
+    boardTab.onClick = [this] { if (boardTab.getToggleState()) showTab (false); };
+    studioTab.onClick = [this] { if (studioTab.getToggleState()) showTab (true); };
+    studioTab.setTooltip (utf8 ("Gravação multipista, mixer, reamp e música de referência"));
+    addChildComponent (studioView);
+    studioView.checkAudio = [this] { return audioProblem(); };
+    studioView.openInitialProject();
+    showTab (settings.getBoolValue ("studioTab", false));
+
     setSize (1400, 990);
     startTimerHz (30);
 }
@@ -278,6 +294,11 @@ void MainComponent::audioDeviceAboutToStart (juce::AudioIODevice* device)
     chain.prepare (device->getCurrentSampleRate(), block);
     silence.allocate ((size_t) juce::jmax (block, 4096), true);
     silenceSize = juce::jmax (block, 4096);
+    mixL.allocate ((size_t) silenceSize, true);
+    mixR.allocate ((size_t) silenceSize, true);
+    studioEngine.prepare (device->getCurrentSampleRate(), block);
+    deviceLatency = device->getInputLatencyInSamples() + device->getOutputLatencyInSamples();
+    studioNeedsRebuild = true; // the takes must be re-read at the new sample rate
 }
 
 void MainComponent::audioDeviceStopped() { chain.releaseResources(); }
@@ -289,16 +310,23 @@ void MainComponent::audioDeviceIOCallbackWithContext (const float* const* inputs
     const int ch = inputChannel.load (std::memory_order_relaxed);
     const float* in = (ch < numInputs && inputs[ch] != nullptr) ? inputs[ch]
                                                                 : (numInputs > 0 && inputs[0] != nullptr ? inputs[0] : nullptr);
-    if (in == nullptr || numSamples > silenceSize)
+    if (numSamples > silenceSize)
     {
         for (int c = 0; c < numOutputs; ++c)
             if (outputs[c] != nullptr)
                 juce::FloatVectorOperations::clear (outputs[c], numSamples);
-        if (in == nullptr)
-            return;
+        return;
     }
+    if (in == nullptr)
+        in = silence.get(); // no input: the tracks still play
 
-    chain.process (in, outputs, numOutputs, numSamples);
+    // guitar chain + recording + playback of the tracks
+    float* l = mixL.get();
+    float* r = mixR.get();
+    studioEngine.process (in, l, r, numSamples, chainAdapter);
+    for (int c = 0; c < numOutputs; ++c)
+        if (outputs[c] != nullptr)
+            juce::FloatVectorOperations::copy (outputs[c], (c % 2 == 0 || numOutputs == 1) ? l : r, numSamples);
 }
 
 // ======================================================================= ui
@@ -314,6 +342,15 @@ void MainComponent::timerCallback()
         tunerCountdown = 3; // ~10 analyses per second
         chain.getTunerTap().latest (tunerBuffer.data(), (int) tunerBuffer.size());
         tuner.setResult (pitchDetector.detect (tunerBuffer.data(), (int) tunerBuffer.size(), chain.getSampleRate()));
+    }
+
+    studioEngine.bpm = chain.getPedalboard().tempo().bpm.load();
+    if (studioNeedsRebuild.exchange (false))
+    {
+        studioProject.setLatencySamples (deviceLatency.load());
+        juce::String ignored;
+        studioProject.rebuild (ignored);
+        studioView.refresh();
     }
 
     const auto levels = chain.readAndResetLevels();
@@ -346,6 +383,13 @@ bool MainComponent::keyPressed (const juce::KeyPress& key)
     if (key.getTextCharacter() == 't' || key.getTextCharacter() == 'T')
     {
         tap();
+        return true;
+    }
+    if (key == juce::KeyPress::spaceKey)
+        return studioView.togglePlay();
+    if (key.getTextCharacter() == 'r' || key.getTextCharacter() == 'R')
+    {
+        studioView.startRecording();
         return true;
     }
     return false;
@@ -491,7 +535,15 @@ void MainComponent::resized()
         micDistance.setBounds (sim);
     }
 
-    r.removeFromTop (10);
+    r.removeFromTop (8);
+    {
+        auto tabs = r.removeFromTop (26);
+        boardTab.setBounds (tabs.removeFromLeft (140));
+        tabs.removeFromLeft (4);
+        studioTab.setBounds (tabs.removeFromLeft (140));
+    }
+    r.removeFromTop (4);
+    studioView.setBounds (r);
     pedalboardView.setBounds (r.removeFromTop (juce::jmax (370, r.getHeight() - 200)));
     r.removeFromTop (10);
     browser.setBounds (r);
@@ -857,8 +909,7 @@ void MainComponent::deleteCurrentPreset()
     const auto name = presetSelect.getText();
     if (presetSelect.getSelectedId() <= 0)
         return;
-    const auto options = juce::MessageBoxOptions::makeOptionsOkCancel (juce::MessageBoxIconType::QuestionIcon, utf8 ("Excluir pedaleira"),
-                                                                        utf8 ("Excluir \"") + name + "\"?", "Excluir", "Cancelar", this);
+    const auto options = juce::MessageBoxOptions{}.withIconType (juce::MessageBoxIconType::QuestionIcon).withTitle (utf8 ("Excluir pedaleira")).withMessage (utf8 ("Excluir \"") + name + "\"?").withButton ("Excluir", 1).withButton ("Cancelar", 0).withAssociatedComponent (this);
     juce::AlertWindow::showAsync (options, [this, name] (int ok)
     {
         if (ok == 1 && presets.remove (name))
@@ -903,4 +954,26 @@ void MainComponent::updateAmpTile()
     pedalboardView.setCaptureName (text);
 }
 
+} // namespace gsp::ui
+
+namespace gsp::ui
+{
+void MainComponent::showTab (bool studio)
+{
+    (studio ? studioTab : boardTab).setToggleState (true, juce::dontSendNotification);
+    pedalboardView.setVisible (! studio);
+    browser.setVisible (! studio);
+    studioView.setVisible (studio);
+    settings.setValue ("studioTab", studio);
+}
+
+juce::String MainComponent::audioProblem() const
+{
+    auto* device = deviceManager.getCurrentAudioDevice();
+    if (device == nullptr || ! device->isPlaying())
+        return utf8 ("Nenhuma interface de áudio aberta. Clique em Configurar áudio antes de gravar.");
+    if (device->getActiveInputChannels().isZero())
+        return utf8 ("A interface não tem nenhuma entrada ativa. Ative a entrada da guitarra em Configurar áudio.");
+    return {};
+}
 } // namespace gsp::ui

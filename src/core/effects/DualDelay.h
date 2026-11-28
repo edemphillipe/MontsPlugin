@@ -26,6 +26,9 @@ private:
     void resetEffect() override;
     void processEffect (float* l, float* r, int n, bool inputMuted) noexcept override;
     bool tailWhenBypassed() const noexcept override { return true; }
+public:
+    std::vector<std::pair<int, int>> linkedParams() const override;
+private:
 
     struct Side
     {
@@ -37,7 +40,7 @@ private:
         float fb = 0.0f;
     };
 
-    int pSync, pMod, pCross;
+    int pSync, pMod, pCross, pLink;
     std::array<Side, 2> sides;
 };
 

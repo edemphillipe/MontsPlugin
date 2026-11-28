@@ -34,7 +34,7 @@ PedalStyle styleFor (const std::string& t)
     if (t == "compressor")      set ("SQUEEZE", "COMPRESSOR", 0xff2f6f73, 0xffffffff, { "sustain", "attack", "level" }, "silver");
     else if (t == "boost")      set ("LIFT", "BOOST", 0xffb8bcc4, 0xff1b1c21, { "gain", "bright" }, "black", 150);
     else if (t == "overdrive")  set ("SUNDRIVE", "OVERDRIVE", 0xffd9a52a, 0xff1d1606, { "drive", "tone", "level" }, "cream");
-    else if (t == "distortion") set ("CRUNCH", "DISTORTION", 0xffc2452d, 0xffffffff, { "gain", "tone", "level" }, "black");
+    else if (t == "distortion") set ("CRUNCH", "DISTORTION", 0xffc2452d, 0xffffffff, { "gain", "bass", "middle", "treble", "level" }, "black", 270);
     else if (t == "fuzz")       set ("BUZZ", "FUZZ", 0xff6b3fa0, 0xffffffff, { "fuzz", "tone", "level" }, "silver");
     else if (t == "chorus")     set ("CHORUS 2", "CHORUS", 0xff3d93d0, 0xffffffff, { "rate", "depth", "mix" }, "cream");
     else if (t == "flanger")    set ("JETSTREAM", "FLANGER", 0xff7a8a99, 0xffffffff, { "rate", "depth", "regen" }, "black");
@@ -67,7 +67,7 @@ PedalEditor::PedalEditor (fx::Effect& effect, const PedalStyle& st, std::functio
             for (int k = 0; k < (int) p.choices.size(); ++k)
                 c.box->addItem (utf8 (p.choices[(size_t) k].c_str()), k + 1);
             c.box->setSelectedId (fx.choice (i) + 1, juce::dontSendNotification);
-            c.box->onChange = [this, i, b = c.box.get(), onChange] { fx.set (i, (float) (b->getSelectedId() - 1)); onChange(); };
+            c.box->onChange = [this, i, b = c.box.get(), onChange] { fx.setFromUser (i, (float) (b->getSelectedId() - 1)); refreshControls(); onChange(); };
             addAndMakeVisible (*c.box);
         }
         else
@@ -79,7 +79,7 @@ PedalEditor::PedalEditor (fx::Effect& effect, const PedalStyle& st, std::functio
             c.slider->setColour (juce::Slider::textBoxOutlineColourId, juce::Colours::transparentBlack);
             c.slider->getProperties().set ("cap", style.cap);
             c.slider->setLookAndFeel (&knobLook);
-            c.slider->onValueChange = [this, i, s = c.slider.get(), onChange] { fx.set (i, (float) s->getValue()); onChange(); };
+            c.slider->onValueChange = [this, i, s = c.slider.get(), onChange] { fx.setFromUser (i, (float) s->getValue()); refreshControls(); onChange(); };
             addAndMakeVisible (*c.slider);
         }
         controls.push_back (std::move (c));
@@ -89,6 +89,17 @@ PedalEditor::PedalEditor (fx::Effect& effect, const PedalStyle& st, std::functio
     const int cols = juce::jmin (5, juce::jmax (3, knobCount));
     const int rows = (knobCount + cols - 1) / cols;
     setSize (cols * 92 + 32, 70 + ((boxes + 1) / 2) * 44 + rows * 112 + 28);
+}
+
+void PedalEditor::refreshControls()
+{
+    for (auto& c : controls)
+    {
+        if (c.slider != nullptr)
+            c.slider->setValue (fx.get (c.param), juce::dontSendNotification);
+        if (c.box != nullptr)
+            c.box->setSelectedId (fx.choice (c.param) + 1, juce::dontSendNotification);
+    }
 }
 
 PedalEditor::~PedalEditor()
@@ -154,7 +165,7 @@ PedalComponent::PedalComponent (fx::Effect& effect, int index)
         k.slider->setPopupDisplayEnabled (true, true, this);
         k.slider->getProperties().set ("cap", style.cap);
         k.slider->setLookAndFeel (&knobLook);
-        k.slider->onValueChange = [this, i, s = k.slider.get()] { fx.set (i, (float) s->getValue()); };
+        k.slider->onValueChange = [this, i, s = k.slider.get()] { fx.setFromUser (i, (float) s->getValue()); refreshFromEffect(); };
         k.slider->onDragEnd = [this] { if (onChanged) onChanged(); };
         addAndMakeVisible (*k.slider);
         knobs.push_back (std::move (k));
@@ -192,6 +203,9 @@ juce::String PedalComponent::modeText() const
         extra = "L " + utf8 (names[(size_t) fx.choice (fx.indexOf ("voiceL"))].c_str()).toUpperCase()
               + " / R " + utf8 (names[(size_t) fx.choice (fx.indexOf ("voiceR"))].c_str()).toUpperCase();
     }
+    const int link = fx.indexOf ("link");
+    if (link >= 0 && fx.choice (link) == 1)
+        extra << utf8 (" · LINK");
     const int sync = fx.indexOf ("sync");
     if (sync >= 0 && fx.choice (sync) == 1)
         extra << (extra.isEmpty() ? "" : utf8 (" · ")) << "TAP";
@@ -366,9 +380,10 @@ PedalboardView::PedalboardView (Pedalboard& b) : board (b)
     hint.setFont (juce::FontOptions (11.0f));
     addAndMakeVisible (hint);
 
-    viewport.setViewedComponent (&strip, false);
-    viewport.setScrollBarsShown (false, true);
-    addAndMakeVisible (viewport);
+    addAndMakeVisible (strip);
+    chooseButton.setTooltip (utf8 ("Escolha quais pedais ficam na pedaleira"));
+    chooseButton.onClick = [this] { showPedalPicker(); };
+    addAndMakeVisible (chooseButton);
 
     for (int i = 0; i < board.size(); ++i)
     {
@@ -400,67 +415,189 @@ juce::Component* PedalboardView::componentForSlot (int slot)
 
 std::pair<juce::Point<float>, juce::Point<float>> PedalboardView::jacksFor (int slot)
 {
+    // jacks in strip coordinates (the pedals may be drawn scaled)
     if (slot == Pedalboard::ampSlot)
-        return { amp.inputJack() + amp.getPosition().toFloat(), amp.outputJack() + amp.getPosition().toFloat() };
+        return { strip.getLocalPoint (&amp, amp.inputJack()), strip.getLocalPoint (&amp, amp.outputJack()) };
     auto& p = *pedals[(size_t) slot];
-    return { p.inputJack() + p.getPosition().toFloat(), p.outputJack() + p.getPosition().toFloat() };
+    return { strip.getLocalPoint (&p, p.inputJack()), strip.getLocalPoint (&p, p.outputJack()) };
+}
+
+std::vector<int> PedalboardView::visibleOrder() const
+{
+    std::vector<int> v;
+    for (int slot : board.getOrder())
+        if (slot == Pedalboard::ampSlot || pedals[(size_t) slot]->isOnBoard())
+            v.push_back (slot);
+    return v;
 }
 
 void PedalboardView::layoutStrip()
 {
-    const int h = juce::jmin (strip.getHeight(), 330);
-    const int top = juce::jmax (0, (strip.getHeight() - h) / 2);
-    int x = 40;
-    for (int slot : board.getOrder())
+    // Like a real pedalboard: everything on screen at once. One row when the pedals fit at a
+    // readable size, otherwise two rows. Pedals are drawn scaled, never cut.
+    constexpr int naturalHeight = 330, margin = 34, rowGap = 14;
+    const auto vis = visibleOrder();
+    for (size_t i = 0; i < pedals.size(); ++i)
+        pedals[i]->setVisible (pedals[i]->isOnBoard());
+
+    auto naturalWidth = [this] (int slot) { return slot == Pedalboard::ampSlot ? 170 : pedals[(size_t) slot]->preferredWidth(); };
+    auto rowWidth = [&] (size_t from, size_t to)
     {
-        auto* c = componentForSlot (slot);
-        const int w = slot == Pedalboard::ampSlot ? 170 : pedals[(size_t) slot]->preferredWidth();
-        c->setBounds (x, top, w, h);
-        x += w + cableGap;
+        int w = 0;
+        for (size_t i = from; i < to; ++i)
+            w += naturalWidth (vis[i]) + (i + 1 < to ? cableGap : 0);
+        return (float) w;
+    };
+    const float availW = (float) juce::jmax (100, strip.getWidth() - 2 * margin);
+    const float availH = (float) juce::jmax (100, strip.getHeight() - 8);
+
+    std::vector<std::pair<size_t, size_t>> rows { { 0, vis.size() } };
+    float scale = juce::jmin (1.0f, availW / juce::jmax (1.0f, rowWidth (0, vis.size())), availH / naturalHeight);
+    if (scale < 0.72f && vis.size() >= 4)
+    {
+        // split where the two rows are most even
+        size_t best = vis.size() / 2;
+        float bestW = 1.0e9f;
+        for (size_t k = 1; k < vis.size(); ++k)
+        {
+            const float w = juce::jmax (rowWidth (0, k), rowWidth (k, vis.size()));
+            if (w < bestW) { bestW = w; best = k; }
+        }
+        const float rowH = (availH - rowGap) / 2.0f;
+        const float twoRowScale = juce::jmin (1.0f, availW / bestW, rowH / naturalHeight);
+        if (twoRowScale > scale)
+        {
+            scale = twoRowScale;
+            rows = { { 0, best }, { best, vis.size() } };
+        }
     }
-    x += 6;
-    if (strip.getWidth() != x)
-        strip.setSize (juce::jmax (x, viewport.getMaximumVisibleWidth()), strip.getHeight());
+
+    rowOf.clear();
+    const float rowsH = (float) rows.size() * naturalHeight * scale + (float) (rows.size() - 1) * rowGap;
+    float y = ((float) strip.getHeight() - rowsH) * 0.5f;
+    for (size_t r = 0; r < rows.size(); ++r)
+    {
+        const auto [from, to] = rows[r];
+        float x = ((float) strip.getWidth() - rowWidth (from, to) * scale) * 0.5f;
+        for (size_t i = from; i < to; ++i)
+        {
+            const int slot = vis[i];
+            auto* c = componentForSlot (slot);
+            c->setTransform (juce::AffineTransform::scale (scale));
+            c->setBounds (juce::roundToInt (x / scale), juce::roundToInt (y / scale), naturalWidth (slot), naturalHeight);
+            rowOf[slot] = (int) r;
+            x += (float) (naturalWidth (slot) + cableGap) * scale;
+        }
+        y += naturalHeight * scale + rowGap;
+    }
     strip.repaint();
 }
 
-int PedalboardView::dropPositionFor (int xInStrip) const
+int PedalboardView::dropPositionFor (juce::Point<int> p) const
 {
-    int position = 0;
-    for (int slot : board.getOrder())
+    // position in the full order (hidden pedals included) of the first visible item the
+    // pointer is before
+    const auto order = board.getOrder();
+    const auto vis = visibleOrder();
+    for (int slot : vis)
     {
         auto* c = slot == Pedalboard::ampSlot ? static_cast<const juce::Component*> (&amp) : pedals[(size_t) slot].get();
-        if (xInStrip > c->getBounds().getCentreX())
-            ++position;
+        const auto b = c->getBoundsInParent();
+        const bool pointerAbove = p.y < b.getY() - 7;
+        const bool sameRow = ! pointerAbove && p.y <= b.getBottom() + 7;
+        if (pointerAbove || (sameRow && p.x < b.getCentreX()))
+            return (int) std::distance (order.begin(), std::find (order.begin(), order.end(), slot));
     }
-    return position;
+    return (int) order.size();
 }
 
 void PedalboardView::dragMoved (juce::Component&, const juce::MouseEvent& e)
 {
     const auto p = e.getEventRelativeTo (&strip).getPosition();
-    const int position = dropPositionFor (p.x);
+    const int position = dropPositionFor (p);
     const auto order = board.getOrder();
-    if (position >= (int) order.size())
-        dropMarkerX = componentForSlot (order.back())->getRight() + cableGap / 2;
-    else
-        dropMarkerX = componentForSlot (order[(size_t) position])->getX() - cableGap / 2;
+    const auto vis = visibleOrder();
+    // the marker goes before the item at `position`, or after the last visible one
+    juce::Rectangle<int> b;
+    bool before = false;
+    for (int slot : vis)
+    {
+        const auto idx = (int) std::distance (order.begin(), std::find (order.begin(), order.end(), slot));
+        if (idx >= position)
+        {
+            b = componentForSlot (slot)->getBoundsInParent();
+            before = true;
+            break;
+        }
+    }
+    if (! before && ! vis.empty())
+        b = componentForSlot (vis.back())->getBoundsInParent();
+    dropMarker = juce::Rectangle<int> (before ? b.getX() - 9 : b.getRight() + 5, b.getY(), 4, b.getHeight());
     strip.repaint();
 }
 
 void PedalboardView::dragEnded (int slot, juce::Component&, const juce::MouseEvent& e)
 {
     const auto p = e.getEventRelativeTo (&strip).getPosition();
-    int position = dropPositionFor (p.x);
+    int position = dropPositionFor (p);
     const auto order = board.getOrder();
     const auto current = (int) std::distance (order.begin(), std::find (order.begin(), order.end(), slot));
     if (position > current)
         --position; // removing the dragged item shifts later positions left
     board.movePedal (slot, position);
-    dropMarkerX = -1;
+    dropMarker = {};
     layoutStrip();
     if (onChanged)
         onChanged();
+}
+
+void PedalboardView::showPedalPicker()
+{
+    struct Picker final : public juce::Component
+    {
+        explicit Picker (PedalboardView& o) : owner (o)
+        {
+            title.setText (utf8 ("Pedais na pedaleira"), juce::dontSendNotification);
+            title.setFont (juce::FontOptions (14.0f, juce::Font::bold));
+            title.setColour (juce::Label::textColourId, colours::accent);
+            addAndMakeVisible (title);
+            note.setText (utf8 ("Desmarcado = sai da tela e fica desligado"), juce::dontSendNotification);
+            note.setFont (juce::FontOptions (11.0f));
+            note.setColour (juce::Label::textColourId, colours::textDim);
+            addAndMakeVisible (note);
+            for (int i = 0; i < owner.board.size(); ++i)
+            {
+                const auto st = styleFor (owner.board.pedal (i).getTypeId());
+                auto* b = boxes.add (new juce::ToggleButton (st.title + "  (" + st.subtitle.toLowerCase() + ")"));
+                b->setToggleState (owner.board.pedal (i).onBoard.load(), juce::dontSendNotification);
+                b->onClick = [this, i, b]
+                {
+                    owner.board.setOnBoard (i, b->getToggleState());
+                    owner.pedals[(size_t) i]->refreshFromEffect();
+                    owner.layoutStrip();
+                    if (owner.onChanged)
+                        owner.onChanged();
+                };
+                addAndMakeVisible (b);
+            }
+            setSize (2 * 200 + 24, 56 + ((boxes.size() + 1) / 2) * 26 + 10);
+        }
+        void resized() override
+        {
+            auto r = getLocalBounds().reduced (12, 8);
+            title.setBounds (r.removeFromTop (20));
+            note.setBounds (r.removeFromTop (18));
+            r.removeFromTop (6);
+            for (int i = 0; i < boxes.size(); ++i)
+                boxes[i]->setBounds (r.getX() + (i % 2) * 200, r.getY() + (i / 2) * 26, 196, 24);
+        }
+        PedalboardView& owner;
+        juce::Label title, note;
+        juce::OwnedArray<juce::ToggleButton> boxes;
+    };
+    auto* top = getTopLevelComponent();
+    juce::CallOutBox::launchAsynchronously (std::make_unique<Picker> (*this),
+                                            top->getLocalArea (this, chooseButton.getBounds()), top);
 }
 
 void PedalboardView::Strip::paint (juce::Graphics& g)
@@ -468,7 +605,7 @@ void PedalboardView::Strip::paint (juce::Graphics& g)
     real::drawFloor (g, getLocalBounds().toFloat());
 
     // patch cables: guitar -> first pedal, between neighbours, last pedal -> output
-    const auto order = owner.board.getOrder();
+    const auto order = owner.visibleOrder();
     if (order.empty())
         return;
     const auto first = owner.jacksFor (order.front()).first;
@@ -478,10 +615,10 @@ void PedalboardView::Strip::paint (juce::Graphics& g)
     const auto last = owner.jacksFor (order.back()).second;
     real::drawCable (g, last, { (float) getWidth(), last.y }, 30.0f);
 
-    if (owner.dropMarkerX >= 0)
+    if (! owner.dropMarker.isEmpty())
     {
         g.setColour (colours::accent);
-        g.fillRoundedRectangle ((float) owner.dropMarkerX - 2.0f, 10.0f, 4.0f, (float) getHeight() - 20.0f, 2.0f);
+        g.fillRoundedRectangle (owner.dropMarker.toFloat(), 2.0f);
     }
 }
 
@@ -496,11 +633,10 @@ void PedalboardView::resized()
     auto r = getLocalBounds().reduced (10);
     auto top = r.removeFromTop (22);
     title.setBounds (top.removeFromLeft (110));
+    chooseButton.setBounds (top.removeFromRight (150));
     hint.setBounds (top);
     r.removeFromTop (4);
-    viewport.setBounds (r);
-    strip.setSize (juce::jmax (strip.getWidth(), r.getWidth()), r.getHeight() - viewport.getScrollBarThickness());
-    layoutStrip();
+    strip.setBounds (r);
 }
 
 } // namespace gsp::ui

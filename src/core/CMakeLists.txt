@@ -29,7 +29,9 @@ target_sources(gsp_core INTERFACE
     ${CMAKE_CURRENT_SOURCE_DIR}/amp/AmpSim.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/amp/CabinetSim.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/tuner/PitchDetector.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/presets/PresetStore.cpp)
+    ${CMAKE_CURRENT_SOURCE_DIR}/presets/PresetStore.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/studio/StudioEngine.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/studio/Project.cpp)
 target_include_directories(gsp_core INTERFACE ${CMAKE_CURRENT_SOURCE_DIR})
 target_link_libraries(gsp_core INTERFACE
     gsp_capture_nam

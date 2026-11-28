@@ -3,6 +3,7 @@
 // Pre-amp pedals: compressor, boost, overdrive, distortion, fuzz.
 // Original algorithms. Clipping stages run 8x oversampled to avoid aliasing.
 
+#include "amp/ToneStack.h"
 #include "effects/Effect.h"
 
 #include <juce_dsp/juce_dsp.h>
@@ -74,17 +75,24 @@ private:
     float drive = 1.0f;
 };
 
+// British-amp-in-a-box distortion: tightened input, a tube-like asymmetric stage into
+// a silicon-diode stage (8x oversampled), and a passive bass/middle/treble tone stack.
 class Distortion final : public ClippingPedal
 {
 public:
     Distortion();
 private:
+    void resetEffect() override;
     void updateFilters() noexcept override;
     float preFilter (float x) noexcept override;
     float shape (float x) noexcept override;
     float postFilter (float x) noexcept override;
-    OnePole inputHp, preLp, toneLp, toneHp;
-    float drive = 1.0f, toneMix = 0.5f;
+    int pBass = 0, pMiddle = 0, pTreble = 0;
+    OnePole tightHp, interLp, interDc, fizzLp1, fizzLp2;
+    amp::ToneStack toneStack;
+    float lastBass = -1.0f, lastMiddle = -1.0f, lastTreble = -1.0f;
+    float drive1 = 1.0f, drive2 = 1.0f, makeup = 1.0f;
+    double preparedRate = 0.0;
 };
 
 class Fuzz final : public ClippingPedal

@@ -10,7 +10,7 @@ PitchResult PitchDetector::detect (const float* x, int n, double sampleRate, dou
     PitchResult r;
     const int maxLag = std::min (n / 2, (int) (sampleRate / 30.0));
     const int minLag = std::max (2, (int) (sampleRate / 1200.0));
-    const int window = n - maxLag;
+    const int window = n - maxLag - 1; // the difference looks ahead up to maxLag + 1 samples
     if (maxLag <= minLag || window < 64)
         return r;
 

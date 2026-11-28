@@ -35,6 +35,7 @@ DualDelay::DualDelay() : Effect ("dualdelay", "Dual Delay", Placement::PostAmp)
     R.pTone     = addParam ({ "toneR", "TONE R", 0.0f, 1.0f, 0.45f, "" });
     R.pLevel    = addParam ({ "levelR", "LEVEL R", 0.0f, 1.0f, 0.35f, "" });
     pCross      = addParam ({ "cross", "CROSS", 0.0f, 1.0f, 0.0f, "" });
+    pLink       = addParam ({ "link", "LINK", 0.0f, 1.0f, 0.0f, "", { "Separado", "Link" } });
 }
 
 double DualDelay::targetSeconds (int side) const noexcept
@@ -75,6 +76,7 @@ void DualDelay::resetEffect()
 void DualDelay::processEffect (float* l, float* r, int n, bool inputMuted) noexcept
 {
     const float mod = get (pMod), cross = get (pCross);
+    const bool linked = choice (pLink) == 1; // REPEATS and LEVEL of R follow L
     float target[2], feedback[2], level[2];
     int voice[2];
 
@@ -83,8 +85,9 @@ void DualDelay::processEffect (float* l, float* r, int n, bool inputMuted) noexc
         auto& s = sides[(size_t) k];
         voice[k] = choice (s.pVoice);
         target[k] = (float) (targetSeconds (k) * fs);
-        feedback[k] = std::min (0.98f, get (s.pFeedback) * (voice[k] == Digital ? 1.0f : 1.05f));
-        level[k] = get (s.pLevel);
+        const auto& src = linked ? sides[0] : s;
+        feedback[k] = std::min (0.98f, get (src.pFeedback) * (voice[k] == Digital ? 1.0f : 1.05f));
+        level[k] = get (src.pLevel);
 
         // TONE: 1.5 kHz .. 15 kHz, darker by design for Analog and Tape
         double cutoff = 1500.0 * std::pow (10.0, (double) get (s.pTone));
@@ -133,4 +136,14 @@ void DualDelay::processEffect (float* l, float* r, int n, bool inputMuted) noexc
     }
 }
 
+} // namespace gsp::fx
+
+namespace gsp::fx
+{
+std::vector<std::pair<int, int>> DualDelay::linkedParams() const
+{
+    if (choice (pLink) != 1)
+        return {};
+    return { { sides[0].pFeedback, sides[1].pFeedback }, { sides[0].pLevel, sides[1].pLevel } };
+}
 } // namespace gsp::fx

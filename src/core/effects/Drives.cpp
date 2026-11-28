@@ -144,38 +144,81 @@ float Overdrive::postFilter (float x) noexcept { return toneLp.lp (midHump.proce
 float Overdrive::cleanBlend (float dry, float wet) noexcept { return wet + 0.5f * cleanLp.lp (dry); }
 
 // ------------------------------------------------------------ Distortion
+namespace
+{
+// passive tone stack with British-amp part values (same circuit model as the amps)
+constexpr amp::ToneStackParts crunchStack { 470e-12, 22e-9, 22e-9, 220e3, 1e6, 22e3, 33e3 };
+}
+
 Distortion::Distortion() : ClippingPedal ("distortion", "Distortion")
 {
-    pGain  = addParam ({ "gain", "GAIN", 0.0f, 1.0f, 0.5f, "" });
-    pTone  = addParam ({ "tone", "TONE", 0.0f, 1.0f, 0.5f, "" });
-    pLevel = addParam ({ "level", "LEVEL", -30.0f, 6.0f, -12.0f, "dB" });
+    pGain   = addParam ({ "gain", "GAIN", 0.0f, 1.0f, 0.55f, "" });
+    pBass   = addParam ({ "bass", "BASS", 0.0f, 1.0f, 0.5f, "" });
+    pMiddle = addParam ({ "middle", "MIDDLE", 0.0f, 1.0f, 0.65f, "" });
+    pTreble = addParam ({ "treble", "TREBLE", 0.0f, 1.0f, 0.55f, "" });
+    pLevel  = addParam ({ "level", "LEVEL", -30.0f, 6.0f, -8.0f, "dB" });
 }
+
+void Distortion::resetEffect()
+{
+    ClippingPedal::resetEffect();
+    for (auto* f : { &tightHp, &interLp, &interDc, &fizzLp1, &fizzLp2 })
+        f->reset();
+    toneStack.reset();
+}
+
 void Distortion::updateFilters() noexcept
 {
-    const float t = get (pTone);
-    if (! juce::exactlyEqual (t, lastTone))
+    const float b = get (pBass), m = get (pMiddle), t = get (pTreble);
+    if (! juce::exactlyEqual (preparedRate, fs))
     {
-        inputHp.setLowpass (fs, 120.0);
-        preLp.setLowpass (fs, 5500.0);
-        toneLp.setLowpass (fs, 1500.0);
-        toneHp.setLowpass (fs, 600.0);
-        toneMix = t;
-        lastTone = t;
+        preparedRate = fs;
+        lastBass = -1.0f; // recompute the tone stack for the new rate
+        tightHp.setLowpass (fs, 380.0);   // lows mostly kept out of the clipping: tight, no flub
+        interLp.setLowpass (osRate, 7000.0);
+        interDc.setLowpass (osRate, 25.0);
+        fizzLp1.setLowpass (fs, 6500.0);  // two poles above the tone stack: no fizz
+        fizzLp2.setLowpass (fs, 9000.0);
+        // the tone stack loses ~-15 dB in the mids; make it unity at noon / 1 kHz
+        const auto a = amp::ToneStack::analog (crunchStack, 0.5, 0.5, 0.5);
+        // ... and bring the clipped signal (about +13 dB hotter than a guitar) back near the dry level
+        makeup = (float) (0.23 / juce::jmax (1.0e-3, amp::ToneStack::analogMagnitude (a, 1000.0)));
     }
-    drive = 5.0f + 600.0f * std::pow (get (pGain), 2.5f);
+    if (! juce::exactlyEqual (b, lastBass) || ! juce::exactlyEqual (m, lastMiddle) || ! juce::exactlyEqual (t, lastTreble))
+    {
+        toneStack.setup (crunchStack, fs, t, m, b);
+        lastBass = b;
+        lastMiddle = m;
+        lastTreble = t;
+    }
+    const float g = get (pGain);
+    drive1 = 1.5f + 40.0f * g * g;   // first (tube-like) stage
+    drive2 = 2.0f + 18.0f * g;       // second (diode) stage
 }
-float Distortion::preFilter (float x) noexcept { return preLp.lp (inputHp.hp (x)) * drive; }
+
+float Distortion::preFilter (float x) noexcept
+{
+    // shelf: highs pass fully, lows at about -10 dB, so palm mutes stay tight
+    const float high = tightHp.hp (x);
+    return (high + 0.3f * (x - high)) * drive1;
+}
+
 float Distortion::shape (float x) noexcept
 {
-    // hard-ish clip with a rounded corner (op-amp into silicon diodes)
-    const float a = std::abs (x);
-    const float y = a < 0.7f ? a : 0.7f + (1.0f - 0.7f) * std::tanh ((a - 0.7f) / 0.3f);
-    return std::copysign (y, x);
+    // stage 1: asymmetric soft saturation (even harmonics, like a triode)
+    constexpr float bias = 0.25f;
+    float y = std::tanh (x + bias) - std::tanh (bias);
+    y = interDc.hp (interLp.lp (y)) * drive2;
+    // stage 2: silicon diodes to ground, firm with a rounded knee
+    const float a = std::abs (y);
+    const float c = a < 0.5f ? a : 0.5f + 0.35f * std::tanh ((a - 0.5f) / 0.35f);
+    return std::copysign (c, y);
 }
+
 float Distortion::postFilter (float x) noexcept
 {
-    const float low = toneLp.lp (x), high = toneHp.hp (x);
-    return (1.0f - toneMix) * low + toneMix * high * 1.4f + 0.3f * low * toneMix;
+    x = fizzLp2.lp (fizzLp1.lp (x));
+    return (float) toneStack.process ((double) x) * makeup;
 }
 
 // ------------------------------------------------------------ Fuzz

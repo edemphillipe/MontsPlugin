@@ -401,6 +401,113 @@ void testDrives()
     }
 }
 
+
+// energy of x in a band around f (2nd-order band-pass), dB
+double bandDb (const std::vector<float>& x, double f)
+{
+    // two band-passes in series: steep enough that a loud neighbouring band doesn't leak in
+    juce::dsp::IIR::Filter<float> bp, bp2;
+    bp.coefficients = juce::dsp::IIR::Coefficients<float>::makeBandPass (fs, f, 1.4);
+    bp2.coefficients = juce::dsp::IIR::Coefficients<float>::makeBandPass (fs, f, 1.4);
+    double e = 0.0;
+    for (size_t i = 0; i < x.size(); ++i)
+    {
+        const float y = bp2.processSample (bp.processSample (x[i]));
+        if (i > x.size() / 4)
+            e += (double) y * y;
+    }
+    return 10.0 * std::log10 (e / (double) x.size() + 1e-20);
+}
+
+void testCrunchToneStack()
+{
+    auto d = make<gsp::fx::Distortion>();
+    d->enabled = true;
+    const auto in = gsptest::guitarLikeSignal ((int) fs, fs);
+    auto with = [&] (const char* knob, float v)
+    {
+        for (const char* k : { "bass", "middle", "treble" })
+            d->set (k, 0.5f);
+        d->set (knob, v);
+        d->reset();
+        return run (*d, in).l;
+    };
+    const double bassLo = bandDb (with ("bass", 0.0f), 100.0), bassHi = bandDb (with ("bass", 1.0f), 100.0);
+    const double midLo = bandDb (with ("middle", 0.0f), 600.0), midHi = bandDb (with ("middle", 1.0f), 600.0);
+    const double trebLo = bandDb (with ("treble", 0.0f), 3000.0), trebHi = bandDb (with ("treble", 1.0f), 3000.0);
+    std::printf ("  CRUNCH tone stack: BASS %+.1f dB @100 Hz, MIDDLE %+.1f dB @600 Hz, TREBLE %+.1f dB @3 kHz\n",
+                 bassHi - bassLo, midHi - midLo, trebHi - trebLo);
+    // British-style passive stack: a wide treble/bass range and a gentler middle (like the amps' stack)
+    CHECK (bassHi - bassLo > 4.0 && midHi - midLo > 2.0 && trebHi - trebLo > 5.0, "tone knobs too weak");
+
+    // default settings: in the same loudness ballpark as the guitar (no big jump when switching on)
+    for (int i = 0; i < (int) d->getParams().size(); ++i)
+        d->set (i, d->getParams()[(size_t) i].def);
+    d->reset();
+    const auto out = run (*d, in).l;
+    const double change = 20.0 * std::log10 (rms (out) / rms (in));
+    std::printf ("  CRUNCH default level vs. dry guitar: %+.1f dB\n", change);
+    CHECK (std::abs (change) < 6.0 && allFinite (out), "level jump %.1f dB", change);
+}
+
+
+void testReverbDamping()
+{
+    // white-ish noise burst into the Cloud reverb, measure the tail by band
+    auto tail = [] (float hi, float lo, float tone)
+    {
+        gsp::fx::Reverb rv;
+        rv.enabled = true;
+        rv.set ("mode", 5.0f); // Cloud
+        rv.set ("decay", 4.0f);
+        rv.set ("mix", 1.0f);
+        rv.set ("hidamp", hi);
+        rv.set ("lowdamp", lo);
+        rv.set ("tone", tone);
+        rv.prepare (fs, block);
+        std::mt19937 rng (5);
+        std::uniform_real_distribution<float> u (-0.5f, 0.5f);
+        std::vector<float> in ((size_t) fs * 3, 0.0f);
+        for (size_t i = 0; i < (size_t) fs / 4; ++i)
+            in[i] = u (rng);
+        auto out = run (rv, in).l;
+        // keep only the tail (0.75 s .. 3 s)
+        return std::vector<float> (out.begin() + (long) (fs * 0.75), out.end());
+    };
+    const auto base = tail (0.5f, 0.4f, 0.5f);
+    const auto noHiDamp = tail (0.0f, 0.4f, 0.5f), fullHiDamp = tail (1.0f, 0.4f, 0.5f);
+    const auto noLowDamp = tail (0.5f, 0.0f, 0.5f), fullLowDamp = tail (0.5f, 1.0f, 0.5f);
+    const auto bright = tail (0.5f, 0.4f, 1.0f), dark = tail (0.5f, 0.4f, 0.0f);
+    const double hi = bandDb (noHiDamp, 5000.0) - bandDb (fullHiDamp, 5000.0);
+    const double lo = bandDb (noLowDamp, 120.0) - bandDb (fullLowDamp, 120.0);
+    const double tn = (bandDb (bright, 5000.0) - bandDb (bright, 200.0)) - (bandDb (dark, 5000.0) - bandDb (dark, 200.0));
+    std::printf ("  Cloud tail: HI DAMP 0->1 removes %.1f dB @5 kHz; LOW DAMP 0->1 removes %.1f dB @120 Hz; TONE 0->1 tilts %+.1f dB (5 kHz vs 200 Hz)\n", hi, lo, tn);
+    CHECK (hi > 10.0, "HI DAMP too weak (%.1f dB)", hi);
+    CHECK (lo > 6.0, "LOW DAMP too weak (%.1f dB)", lo);
+    CHECK (tn > 10.0, "TONE too weak (%.1f dB)", tn);
+    CHECK (allFinite (base) && allFinite (noHiDamp) && allFinite (bright), "NaN");
+}
+
+
+void testPedalsOffTheBoard()
+{
+    gsp::Pedalboard board;
+    const int flanger = board.indexOfType ("flanger");
+    board.pedal (flanger).enabled = true;
+    board.setOnBoard (flanger, false);
+    CHECK (! board.pedal (flanger).onBoard.load() && ! board.pedal (flanger).enabled.load(), "taken off the board = switched off");
+    const auto saved = juce::JSON::parse (juce::JSON::toString (board.toVar()));
+    gsp::Pedalboard restored;
+    restored.fromVar (saved);
+    CHECK (! restored.pedal (flanger).onBoard.load() && restored.pedal (restored.indexOfType ("reverb")).onBoard.load(), "saved and restored");
+    // presets saved before this option existed: every pedal stays on the board
+    auto* old = saved.getDynamicObject()->getProperty ("pedals").getDynamicObject()->getProperty ("flanger").getDynamicObject();
+    old->removeProperty ("onBoard");
+    gsp::Pedalboard fromOld;
+    fromOld.fromVar (saved);
+    CHECK (fromOld.pedal (flanger).onBoard.load(), "old preset");
+}
+
 void testCompressor()
 {
     auto c = make<gsp::fx::Compressor>();
@@ -508,6 +615,45 @@ void testOrderAndPresets()
         CHECK (delayPos + 1 != order.end() && *(delayPos + 1) == old.indexOfType ("dualdelay"), "new pedal not placed after ECHOES");
         std::printf ("  order saved by an older version is kept; the dual delay is added after ECHOES\n");
     }
+}
+
+
+void testDualDelayLink()
+{
+    gsp::fx::DualDelay d;
+    const int fbL = d.indexOf ("feedbackL"), fbR = d.indexOf ("feedbackR"), lvL = d.indexOf ("levelL"), lvR = d.indexOf ("levelR");
+    const int link = d.indexOf ("link");
+    CHECK (link >= 0 && d.numParams() <= 16, "link param");
+    d.setFromUser (fbL, 0.2f);
+    d.setFromUser (fbR, 0.7f);
+    CHECK (std::abs (d.get (fbL) - 0.2f) < 1e-6f && std::abs (d.get (fbR) - 0.7f) < 1e-6f, "separate by default");
+    d.setFromUser (link, 1.0f); // switching LINK on: R takes L's values
+    CHECK (std::abs (d.get (fbR) - 0.2f) < 1e-6f && std::abs (d.get (lvR) - d.get (lvL)) < 1e-6f, "R follows L when linked");
+    d.setFromUser (fbR, 0.55f); // moving either side moves both
+    d.setFromUser (lvL, 0.8f);
+    CHECK (std::abs (d.get (fbL) - 0.55f) < 1e-6f && std::abs (d.get (lvR) - 0.8f) < 1e-6f, "linked knobs move together");
+    d.setFromUser (link, 0.0f);
+    d.setFromUser (fbL, 0.1f);
+    CHECK (std::abs (d.get (fbR) - 0.55f) < 1e-6f, "unlinked again");
+
+    // the sound: with LINK on, R repeats like L even if its own knob was left elsewhere
+    gsp::fx::DualDelay a;
+    a.enabled = true;
+    a.set ("timeL", 100.0f);
+    a.set ("timeR", 100.0f);
+    a.set ("feedbackL", 0.6f);
+    a.set ("feedbackR", 0.0f);
+    a.set ("voiceR", 0.0f); // same voice on both sides for a fair comparison
+    a.set ("mod", 0.0f);
+    a.set ("link", 1.0f);
+    a.prepare (fs, block);
+    const auto out = run (a, impulse ((int) fs / 2));
+    const double l3 = std::abs (out.l[(size_t) (fs * 0.3)]), r3 = std::abs (out.r[(size_t) (fs * 0.3)]);
+    double lE = 0, rE = 0;
+    for (size_t i = (size_t) (fs * 0.25); i < (size_t) (fs * 0.45); ++i) { lE += out.l[i] * out.l[i]; rE += out.r[i] * out.r[i]; }
+    std::printf ("  LINK: energy of the 3rd/4th repeats L %.3g, R %.3g\n", lE, rE);
+    juce::ignoreUnused (l3, r3);
+    CHECK (rE > 0.5 * lE && lE > 1e-6, "R does not repeat like L when linked");
 }
 
 void testDualDelay()
@@ -620,12 +766,16 @@ void runEffectTests()
     runTest ("Pedals: on/off switching without clicks", testSwitchingIsClickFree);
     runTest ("Delay: time and TAP sync", testDelayTiming);
     runTest ("Dual delay: independent L/R time, tone, cross, stability", testDualDelay);
+    runTest ("Dual delay: LINK repeats and level", testDualDelayLink);
+    runTest ("Pedalboard: pedals taken off the board", testPedalsOffTheBoard);
     runTest ("Delay: ping pong alternates sides", testPingPong);
     runTest ("Delay: reverse", testReverseDelay);
     runTest ("Reverb: decay time and stereo", testReverbDecay);
     runTest ("Reverb: shimmer cannot run away", testShimmerStable);
     runTest ("Reverb: tail keeps ringing when switched off", testReverbTailWhenBypassed);
     runTest ("Drives: gain adds distortion, low aliasing", testDrives);
+    runTest ("Drives: CRUNCH bass/middle/treble and level", testCrunchToneStack);
+    runTest ("Reverb: HI DAMP, LOW DAMP and TONE", testReverbDamping);
     runTest ("Compressor reduces dynamics", testCompressor);
     runTest ("Tremolo follows TAP tempo", testTremoloSync);
     runTest ("TAP tempo", testTapTempo);
