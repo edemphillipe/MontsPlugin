@@ -2,6 +2,7 @@
 
 #include "CaptureBrowser.h"
 #include "PedalboardView.h"
+#include "StudioView.h"
 #include "TunerDisplay.h"
 #include "LookAndFeel.h"
 #include "Widgets.h"
@@ -73,6 +74,23 @@ private:
     juce::HeapBlock<float> silence;
     int silenceSize = 0;
 
+    // recording studio: the guitar chain runs inside the studio engine
+    struct ChainAdapter final : studio::StudioEngine::Chain
+    {
+        explicit ChainAdapter (SignalChain& c) : signalChain (c) {}
+        void run (const float* in, float* l, float* r, int n) noexcept override
+        {
+            float* outs[] = { l, r };
+            signalChain.process (in, outs, 2, n);
+        }
+        SignalChain& signalChain;
+    } chainAdapter { chain };
+    studio::StudioEngine studioEngine;
+    studio::Project studioProject { studioEngine };
+    juce::HeapBlock<float> mixL, mixR;
+    std::atomic<bool> studioNeedsRebuild { false };
+    std::atomic<int> deviceLatency { 0 };
+
     // header
     juce::Label appTitle, deviceLabel;
     juce::TextButton audioButton { gsp::ui::utf8 ("Configurar áudio") };
@@ -126,6 +144,10 @@ private:
 
     PedalboardView pedalboardView { chain.getPedalboard() };
     CaptureBrowser browser;
+    juce::TextButton boardTab { "PEDALEIRA" }, studioTab { gsp::ui::utf8 ("GRAVAÇÃO") };
+    StudioView studioView { studioEngine, studioProject, settings };
+    void showTab (bool studio);
+    juce::String audioProblem() const;
 
     std::unique_ptr<juce::FileChooser> chooser;
     juce::File currentCaptureFile, currentIrFile;

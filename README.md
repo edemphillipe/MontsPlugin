@@ -31,7 +31,15 @@ Estúdio de guitarra **standalone** (não precisa de DAW) para **macOS** e **Win
 | Clicar no pedal abre um editor com todos os controles (tipo, subdivisão, knobs) | Pronto | Conferido no app; precisa do seu teste com o mouse |
 | Presets de pedaleira: salvar, carregar e excluir a pedaleira inteira com amp, captura, IR e ajustes, em Documentos/Guitar Studio Pro/Pedaleiras | Pronto | Testes de salvar, ler, listar e excluir; salvar pela tela conferido (arquivo gerado com todos os ajustes) |
 | Afinador cromático (corta a saída enquanto está ligado) | Pronto | Testes com as 6 cordas (erro máximo 0,13 cent), cordas desafinadas (dentro de 1 cent), silêncio e ruído não mostram nota, saída mutada |
-| Gravação, mixer, reamp, música de referência | Fase 3 | |
+| Gravação multipista (até 8 faixas): cada take guarda a guitarra limpa (DI) e o som com amp e pedais, em WAV 24 bits | Pronto | Testes: DI igual à entrada, som igual à saída do amp, nenhuma amostra perdida. Precisa do seu teste com interface real |
+| Compensação de latência: a faixa gravada fica alinhada com o que você ouvia | Pronto | Teste com latência de 100 amostras: o take toca exatamente na amostra certa. Usa a latência que o driver informa |
+| Mixer por faixa: volume, pan, mudo, solo; armar faixa para regravar por cima (o take antigo continua salvo) | Pronto | Testes de volume (-6 dB), pan, solo, mudo e regravação |
+| Reamp: a gravação limpa passa pelo amp e pedais atuais e vira o novo som da faixa (com 3 s a mais para a cauda de delay e reverb) | Pronto | Teste: novo som na posição exata, sem vazar a guitarra ao vivo; reamp cancelado no meio não altera a faixa |
+| Música de referência para tocar junto (WAV, AIFF, FLAC, MP3, OGG), com volume e mudo | Pronto | Teste com arquivo em 44,1 kHz tocando numa sessão de 48 kHz: posição certa (erro de até 2 amostras) |
+| Metrônomo no BPM do TAP (só no fone, não entra no mix) | Pronto | Teste: clique em cada tempo, tempo 1 mais forte, fora do mix exportado |
+| Exportar mix em WAV estéreo 24 bits | Pronto | Teste comparando o arquivo com a reprodução; exportado também pela tela |
+| Projetos de gravação em Documentos/Guitar Studio Pro/Gravações (abre o último ao iniciar) | Pronto | Teste: fechar e reabrir o projeto mantém as faixas |
+| Tela de gravação: formas de onda, régua de tempo, clique para posicionar, barra de espaço toca/pausa, R grava | Pronto | Conferida em capturas de tela com um projeto de exemplo. Tocar e gravar com áudio de verdade precisa do seu teste (esta máquina não tem interface de áudio) |
 | Projetos de gravação, instaladores assinados | Fase 4 | |
 
 ## Baixar e instalar

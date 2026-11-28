@@ -246,6 +246,7 @@ void testSignalChainSwap()
 void runEffectTests(); // EffectTests.cpp
 void runAmpTests();    // AmpTests.cpp
 void runStudioTests(); // StudioTests.cpp
+void runRecordingTests(); // RecordingTests.cpp
 
 int main()
 {
@@ -259,6 +260,7 @@ int main()
     runEffectTests();
     runAmpTests();
     runStudioTests();
+    runRecordingTests();
 
     std::printf ("\n%d checks, %d failures, %d skipped\n", checks, failures, skipped);
     return failures == 0 ? 0 : 1;
