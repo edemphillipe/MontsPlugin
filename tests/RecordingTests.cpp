@@ -3,6 +3,7 @@
 
 #include "TestUtil.h"
 
+#include "engine/SignalChain.h"
 #include "studio/Project.h"
 
 using namespace gsptest;
@@ -381,6 +382,37 @@ void testSessionJson()
            "round trip");
 }
 
+
+void testLiveSoundUnchanged()
+{
+    // the live guitar through the studio engine must sound exactly like the chain alone
+    gsp::SignalChain direct, viaStudio;
+    direct.prepare (fs, block);
+    viaStudio.prepare (fs, block);
+    direct.ampSource = viaStudio.ampSource = (int) gsp::SignalChain::sourceAmpModel;
+    struct Adapter final : StudioEngine::Chain
+    {
+        gsp::SignalChain& c;
+        explicit Adapter (gsp::SignalChain& x) : c (x) {}
+        void run (const float* in, float* l, float* r, int n) noexcept override { float* o[] = { l, r }; c.process (in, o, 2, n); }
+    } adapter (viaStudio);
+    StudioEngine engine;
+    engine.prepare (fs, block);
+    const auto in = guitarLikeSignal ((int) fs, fs);
+    std::vector<float> dl (in.size()), dr (in.size());
+    for (size_t s = 0; s < in.size(); s += block)
+    {
+        float* o[] = { dl.data() + s, dr.data() + s };
+        direct.process (in.data() + s, o, 2, (int) std::min ((size_t) block, in.size() - s));
+    }
+    const auto [sl, sr] = runEngine (engine, adapter, in);
+    double maxDiff = 0.0;
+    for (size_t i = 0; i < in.size(); ++i)
+        maxDiff = std::max (maxDiff, (double) std::abs (dl[i] - sl[i]) + std::abs (dr[i] - sr[i]));
+    std::printf ("  live sound: chain alone rms %.4f, through the studio rms %.4f, largest difference %g\n", rms (dl), rms (sl), maxDiff);
+    CHECK (maxDiff < 1.0e-6 && rms (dl) > 0.01, "studio changes the live sound (%g)", maxDiff);
+}
+
 } // namespace
 
 void runRecordingTests()
@@ -391,4 +423,5 @@ void runRecordingTests()
     runTest ("Recording: reference music (44.1 kHz) and click", testClickAndReference);
     runTest ("Recording: read-ahead playback from the middle", testBufferedPlayback);
     runTest ("Recording: session file", testSessionJson);
+    runTest ("Recording: live sound unchanged through the studio", testLiveSoundUnchanged);
 }
