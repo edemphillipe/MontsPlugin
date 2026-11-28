@@ -20,7 +20,7 @@ public:
     void resized() override;
 
     juce::Label name;
-    juce::TextButton arm { juce::String::fromUTF8 ("●") }, mute { "M" }, solo { "S" }, reamp { "Reamp" }, remove { "X" };
+    juce::TextButton arm { juce::String::fromUTF8 ("●") }, mute { "M" }, solo { "S" }, reamp { "Reamp" }, remove { "X" }, takes { "Takes" };
     juce::Slider volume, pan;
     bool selected = false;
 };
@@ -44,6 +44,8 @@ public:
 
     // returns an error text when there is no audio device / input to record from
     std::function<juce::String()> checkAudio;
+    // puts a take's sound (pedalboard, amp, cabinet...) back on the board
+    std::function<void (const juce::var&)> onLoadTone;
 
 private:
     void timerCallback() override;
@@ -53,6 +55,10 @@ private:
     void refreshProjectList();
     void openProject (const juce::File&);
     void newProject();
+    void showProjectMenu();
+    void renameProject();
+    void deleteProject();
+    void showTakesMenu (int track);
     void exportMix();
     void chooseReference();
     void updateTransportButtons();
@@ -70,7 +76,7 @@ private:
 
     // top bar
     juce::ComboBox projectSelect;
-    juce::TextButton newProjectButton { "Novo projeto" }, showFolderButton { "Abrir pasta" };
+    juce::TextButton newProjectButton { "Novo projeto" }, projectMenuButton { juce::String::fromUTF8 ("Projeto ▾") };
     juce::TextButton toStartButton { "|<" }, playButton { "Tocar" }, stopButton { "Parar" }, recordButton { "Gravar" };
     juce::Label timeLabel;
     juce::ToggleButton clickToggle { juce::String::fromUTF8 ("Metrônomo") };

@@ -43,31 +43,73 @@ jobs:
       - name: Test (NAM, AIDA-X, resampler, signal chain)
         run: ctest --test-dir build -C Release --output-on-failure
 
-      - name: Package macOS (.dmg)
+      - name: Version
+        id: version
+        shell: bash
+        run: echo "value=$(sed -nE 's/^project\(GuitarStudioPro VERSION ([0-9.]+).*/\1/p' CMakeLists.txt)" >> "$GITHUB_OUTPUT"
+
+      # Unsigned unless the signing secrets exist (docs/ASSINATURA.md): then the app is
+      # signed with the Developer ID, notarized and stapled.
+      - name: Installer macOS (.dmg)
         if: runner.os == 'macOS'
+        env:
+          MACOS_CERT_P12: ${{ secrets.MACOS_CERT_P12 }}
+          MACOS_CERT_PASSWORD: ${{ secrets.MACOS_CERT_PASSWORD }}
+          MACOS_SIGN_IDENTITY: ${{ secrets.MACOS_SIGN_IDENTITY }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          APPLE_APP_PASSWORD: ${{ secrets.APPLE_APP_PASSWORD }}
         run: |
           APP=$(find build/src/app -name "Guitar Studio Pro.app" -maxdepth 4 | head -1)
-          lipo -info "$APP/Contents/MacOS/Guitar Studio Pro"
-          mkdir -p dist/dmg
-          cp -R "$APP" dist/dmg/
-          ln -s /Applications dist/dmg/Applications
-          cp docs/INSTALACAO.md dist/dmg/LEIA-ME.md
-          hdiutil create -volname "Guitar Studio Pro" -srcfolder dist/dmg -ov -format UDZO "dist/GuitarStudioPro-${{ github.sha }}.dmg"
+          packaging/macos/package.sh "$APP" "${{ steps.version.outputs.value }}" dist
 
-      - name: Package Windows (.zip)
+      # Setup.exe with Inno Setup, plus the portable .zip. Signed when WINDOWS_CERT_PFX exists.
+      - name: Installer Windows (Setup.exe)
         if: runner.os == 'Windows'
         shell: pwsh
+        env:
+          WINDOWS_CERT_PFX: ${{ secrets.WINDOWS_CERT_PFX }}
+          WINDOWS_CERT_PASSWORD: ${{ secrets.WINDOWS_CERT_PASSWORD }}
         run: |
+          $version = "${{ steps.version.outputs.value }}"
           $exe = Get-ChildItem -Recurse build/src/app -Filter "Guitar Studio Pro.exe" | Select-Object -First 1
           New-Item -ItemType Directory -Force dist/GuitarStudioPro | Out-Null
           Copy-Item $exe.FullName dist/GuitarStudioPro/
+
+          $iscc = "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe"
+          if (-not (Test-Path $iscc)) {
+            choco install innosetup -y --no-progress
+            if ($LASTEXITCODE -ne 0) { throw "Inno Setup install failed" }
+          }
+          $isccArgs = @("/DAppVersion=$version", "/DSourceExe=$((Resolve-Path dist/GuitarStudioPro).Path)\Guitar Studio Pro.exe", "/DOutputDir=$((Resolve-Path dist).Path)")
+
+          if ($env:WINDOWS_CERT_PFX) {
+            Write-Host "Signing with the Windows certificate"
+            $pfx = Join-Path $env:RUNNER_TEMP "cert.pfx"
+            [IO.File]::WriteAllBytes($pfx, [Convert]::FromBase64String($env:WINDOWS_CERT_PFX))
+            $signtool = (Get-ChildItem "${env:ProgramFiles(x86)}\Windows Kits\10\bin\*\x64\signtool.exe" | Sort-Object FullName | Select-Object -Last 1).FullName
+            $sign = @("sign", "/f", $pfx, "/p", $env:WINDOWS_CERT_PASSWORD, "/fd", "sha256", "/tr", "http://timestamp.digicert.com", "/td", "sha256")
+            & $signtool @sign "dist/GuitarStudioPro/Guitar Studio Pro.exe"
+            if ($LASTEXITCODE -ne 0) { throw "signtool failed" }
+            $isccArgs += "/DSign"
+            $isccArgs += "/Ssigntool=`$q$signtool`$q sign /f `$q$pfx`$q /p $env:WINDOWS_CERT_PASSWORD /fd sha256 /tr http://timestamp.digicert.com /td sha256 `$f"
+          } else {
+            Write-Host "No signing certificate: unsigned build"
+          }
+
+          & $iscc @isccArgs packaging/windows/GuitarStudioPro.iss
+          if ($LASTEXITCODE -ne 0) { throw "Inno Setup failed" }
+          if ($pfx) { Remove-Item $pfx }
+
           Copy-Item docs/INSTALACAO.md dist/GuitarStudioPro/LEIA-ME.md
-          Compress-Archive -Path dist/GuitarStudioPro/* -DestinationPath "dist/GuitarStudioPro-${{ github.sha }}.zip"
+          Compress-Archive -Path dist/GuitarStudioPro/* -DestinationPath "dist/GuitarStudioPro-$version-Windows-portatil.zip"
+          Get-ChildItem dist
 
       - uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.artifact }}
           path: |
             dist/*.dmg
+            dist/*.exe
             dist/*.zip
           if-no-files-found: error

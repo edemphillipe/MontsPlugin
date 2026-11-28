@@ -25,6 +25,21 @@ juce::var SessionInfo::toVar() const
         o->setProperty ("pan", t.pan);
         o->setProperty ("mute", t.mute);
         o->setProperty ("solo", t.solo);
+        o->setProperty ("tone", t.tone);
+        o->setProperty ("label", t.takeLabel);
+        juce::Array<juce::var> hist;
+        for (const auto& h : t.history)
+        {
+            auto* ho = new juce::DynamicObject();
+            ho->setProperty ("di", h.diFile);
+            ho->setProperty ("wet", h.wetFile);
+            ho->setProperty ("diStart", h.diStartSeconds);
+            ho->setProperty ("wetStart", h.wetStartSeconds);
+            ho->setProperty ("tone", h.tone);
+            ho->setProperty ("label", h.label);
+            hist.add (juce::var (ho));
+        }
+        o->setProperty ("history", hist);
         list.add (juce::var (o));
     }
     root->setProperty ("tracks", list);
@@ -59,6 +74,20 @@ SessionInfo SessionInfo::fromVar (const juce::var& v)
             t.pan = juce::jlimit (-1.0f, 1.0f, (float) (double) o.getProperty ("pan", 0.0));
             t.mute = (bool) o.getProperty ("mute", false);
             t.solo = (bool) o.getProperty ("solo", false);
+            t.tone = o.getProperty ("tone", {});
+            t.takeLabel = o.getProperty ("label", {}).toString();
+            if (auto* hist = o.getProperty ("history", {}).getArray())
+                for (const auto& h : *hist)
+                {
+                    TakeInfo k;
+                    k.diFile = h.getProperty ("di", {}).toString();
+                    k.wetFile = h.getProperty ("wet", {}).toString();
+                    k.diStartSeconds = (double) h.getProperty ("diStart", 0.0);
+                    k.wetStartSeconds = (double) h.getProperty ("wetStart", k.diStartSeconds);
+                    k.tone = h.getProperty ("tone", {});
+                    k.label = h.getProperty ("label", {}).toString();
+                    t.history.push_back (k);
+                }
             s.tracks.push_back (t);
         }
     const auto backing = v.getProperty ("reference", {});
@@ -85,12 +114,79 @@ Project::~Project()
     io.stopThread (2000);
 }
 
+void Project::close()
+{
+    stop();
+    engine.setGraph (nullptr);
+    engine.seek (0);
+    graphLength = 0;
+    folder = juce::File();
+    info = SessionInfo();
+}
+
+bool Project::rename (const juce::String& newName, juce::String& error)
+{
+    if (! isOpen())
+        return false;
+    const auto legal = juce::File::createLegalFileName (newName.trim());
+    if (legal.isEmpty())
+    {
+        error = juce::String::fromUTF8 ("Nome inválido.");
+        return false;
+    }
+    const auto old = folder;
+    const auto target = old.getSiblingFile (legal);
+    if (target == old)
+        return true;
+    if (target.exists())
+    {
+        error = juce::String::fromUTF8 ("Já existe um projeto chamado \"") + legal + "\".";
+        return false;
+    }
+    // reference music kept inside the project folder moves with it
+    const juce::File backing (info.backingFile);
+    const auto backingInside = info.backingFile.isNotEmpty() && backing.isAChildOf (old);
+    const auto backingRelative = backing.getRelativePathFrom (old);
+    close(); // the audio files must be closed before the folder can move (Windows)
+    const bool moved = old.moveFileTo (target);
+    if (! moved)
+        error = juce::String::fromUTF8 ("Não foi possível renomear a pasta do projeto.");
+    juce::String openErr;
+    if (! open (moved ? target : old, openErr) && error.isEmpty())
+        error = openErr;
+    if (moved && backingInside)
+    {
+        info.backingFile = target.getChildFile (backingRelative).getFullPathName();
+        save();
+        juce::String e;
+        if (rebuild (e))
+            notice.clear(); // the "file not found" from opening was only the old path
+    }
+    return moved;
+}
+
+bool Project::moveToTrash (juce::String& error)
+{
+    if (! isOpen())
+        return false;
+    const auto old = folder;
+    close();
+    if (! old.moveToTrash())
+    {
+        error = juce::String::fromUTF8 ("Não foi possível mover o projeto para a lixeira.");
+        juce::String e;
+        open (old, e);
+        return false;
+    }
+    return true;
+}
+
 bool Project::open (const juce::File& dir, juce::String& error)
 {
     stop();
     if (! dir.createDirectory() || ! dir.getChildFile ("Takes").createDirectory())
     {
-        error = "Não foi possível criar a pasta do projeto: " + dir.getFullPathName();
+        error = juce::String::fromUTF8 ("Não foi possível criar a pasta do projeto: ") + dir.getFullPathName();
         return false;
     }
     SessionInfo loaded;
@@ -100,7 +196,7 @@ bool Project::open (const juce::File& dir, juce::String& error)
         const auto v = juce::JSON::parse (json);
         if (v.getProperty ("format", {}).toString() != "guitar-studio-pro-session")
         {
-            error = "O arquivo session.json deste projeto não é válido.";
+            error = juce::String::fromUTF8 ("O arquivo session.json deste projeto não é válido.");
             return false;
         }
         loaded = SessionInfo::fromVar (v);
@@ -180,7 +276,7 @@ std::unique_ptr<StudioEngine::Graph> Project::buildGraph (bool rt, double rate, 
     {
         g->backing = makePlayer (juce::File (info.backingFile), 0, rt, rate, block);
         if (g->backing == nullptr)
-            missing.add ("música de referência");
+            missing.add (juce::String::fromUTF8 ("música de referência"));
     }
     if (reampTrack >= 0 && reampTrack < (int) info.tracks.size())
     {
@@ -188,7 +284,7 @@ std::unique_ptr<StudioEngine::Graph> Project::buildGraph (bool rt, double rate, 
         g->reampSource = makePlayer (fileFor (t.diFile), (juce::int64) std::llround (t.diStartSeconds * rate), rt, rate, block);
     }
     if (! missing.isEmpty())
-        error = "Arquivo não encontrado ou ilegível: " + missing.joinIntoString (", ");
+        error = juce::String::fromUTF8 ("Arquivo não encontrado ou ilegível: ") + missing.joinIntoString (", ");
     return g;
 }
 
@@ -230,7 +326,7 @@ std::unique_ptr<juce::AudioFormatWriter::ThreadedWriter> Project::makeWriter (co
     std::unique_ptr<juce::OutputStream> stream = std::make_unique<juce::FileOutputStream> (f);
     if (static_cast<juce::FileOutputStream*> (stream.get())->failedToOpen())
     {
-        error = "Não foi possível criar o arquivo " + f.getFullPathName();
+        error = juce::String::fromUTF8 ("Não foi possível criar o arquivo ") + f.getFullPathName();
         return nullptr;
     }
     juce::WavAudioFormat wav;
@@ -241,7 +337,7 @@ std::unique_ptr<juce::AudioFormatWriter::ThreadedWriter> Project::makeWriter (co
     auto writer = wav.createWriterFor (stream, options);
     if (writer == nullptr)
     {
-        error = "Não foi possível gravar WAV em " + f.getFullPathName();
+        error = juce::String::fromUTF8 ("Não foi possível gravar WAV em ") + f.getFullPathName();
         return nullptr;
     }
     return std::make_unique<juce::AudioFormatWriter::ThreadedWriter> (writer.release(), io,
@@ -274,7 +370,7 @@ bool Project::record (int track, juce::String& error)
         track = -1;
     if (track < 0 && (int) info.tracks.size() >= maxTracks)
     {
-        error = "O projeto já tem " + juce::String (maxTracks) + " faixas. Escolha uma faixa para gravar por cima ou apague uma.";
+        error = juce::String::fromUTF8 ("O projeto já tem ") + juce::String (maxTracks) + " faixas. Escolha uma faixa para gravar por cima ou apague uma.";
         return false;
     }
     pendingDi = newTakeName ("DI");
@@ -284,6 +380,7 @@ bool Project::record (int track, juce::String& error)
     if (di == nullptr || wet == nullptr)
         return false;
     ++info.nextTake;
+    pendingTone = toneProvider ? toneProvider() : juce::var();
     save();
     engine.record (std::move (di), std::move (wet), track);
     return true;
@@ -301,13 +398,13 @@ bool Project::reamp (int track, juce::String& error)
     const auto& t = info.tracks[(size_t) track];
     if (t.diFile.isEmpty() || ! fileFor (t.diFile).existsAsFile())
     {
-        error = "Esta faixa não tem a gravação limpa (DI), então não dá para fazer reamp.";
+        error = juce::String::fromUTF8 ("Esta faixa não tem a gravação limpa (DI), então não dá para fazer reamp.");
         return false;
     }
     auto g = buildGraph (realtime, engine.getSampleRate(), engine.getMaxBlock(), track, error);
     if (g->reampSource == nullptr)
     {
-        error = "Não foi possível ler a gravação limpa (DI) desta faixa.";
+        error = juce::String::fromUTF8 ("Não foi possível ler a gravação limpa (DI) desta faixa.");
         return false;
     }
     error.clear(); // a missing file on another track does not stop a re-amp
@@ -328,6 +425,7 @@ bool Project::reamp (int track, juce::String& error)
         return false;
     }
     ++info.nextTake;
+    pendingTone = toneProvider ? toneProvider() : juce::var();
     save();
     engine.reamp (std::move (wet), track, end);
     return true;
@@ -372,20 +470,19 @@ void Project::finish (StudioEngine::Finished f)
     {
         // what was played at timeline position p reaches the input `latency` samples later
         const double start = (double) (f.startPosition - latency) / rate;
+        TakeInfo take { pendingDi, pendingWet, start, start, pendingTone, takeLabelNow (juce::String::fromUTF8 ("Gravação")) };
         if (f.track >= 0 && f.track < (int) info.tracks.size())
         {
             auto& t = info.tracks[(size_t) f.track];
-            t.diFile = pendingDi;
-            t.wetFile = pendingWet;
-            t.diStartSeconds = t.wetStartSeconds = start;
+            if (t.wetFile.isNotEmpty())
+                t.history.push_back (t.current()); // the take you recorded over stays available
+            t.setCurrent (take);
         }
         else
         {
             TrackInfo t;
             t.name = "Faixa " + juce::String ((int) info.tracks.size() + 1);
-            t.diFile = pendingDi;
-            t.wetFile = pendingWet;
-            t.diStartSeconds = t.wetStartSeconds = start;
+            t.setCurrent (take);
             info.tracks.push_back (t);
         }
         notice = "Gravado: " + juce::String ((double) recorded / rate, 1) + " s.";
@@ -393,13 +490,16 @@ void Project::finish (StudioEngine::Finished f)
     else if (f.track >= 0 && f.track < (int) info.tracks.size())
     {
         auto& t = info.tracks[(size_t) f.track];
+        t.history.push_back (t.current()); // the sound before the re-amp stays available
         t.wetFile = pendingWet;
         t.wetStartSeconds = (double) f.startPosition / rate; // re-amp output is aligned with the timeline
-        notice = "Reamp concluído na " + t.name + ".";
+        t.tone = pendingTone;
+        t.takeLabel = takeLabelNow ("Reamp");
+        notice = juce::String::fromUTF8 ("Reamp concluído na ") + t.name + ".";
     }
     if (dropped > 0)
-        notice << " Atenção: " << juce::String ((double) dropped / rate, 2)
-               << " s não couberam no disco a tempo (disco lento?).";
+        notice << juce::String::fromUTF8 (" Atenção: ") << juce::String ((double) dropped / rate, 2)
+               << juce::String::fromUTF8 (" s não couberam no disco a tempo (disco lento?).");
 
     pendingDi.clear();
     pendingWet.clear();
@@ -411,6 +511,31 @@ void Project::finish (StudioEngine::Finished f)
         engine.seek (f.startPosition);
     if (onChanged)
         onChanged();
+}
+
+juce::String Project::takeLabelNow (const juce::String& kind)
+{
+    return kind + " " + juce::Time::getCurrentTime().formatted ("%d/%m %H:%M");
+}
+
+bool Project::useTake (int track, int historyIndex)
+{
+    if (track < 0 || track >= (int) info.tracks.size())
+        return false;
+    auto& t = info.tracks[(size_t) track];
+    if (historyIndex < 0 || historyIndex >= (int) t.history.size())
+        return false;
+    stop();
+    const auto chosen = t.history[(size_t) historyIndex];
+    t.history.erase (t.history.begin() + historyIndex);
+    t.history.push_back (t.current());
+    t.setCurrent (chosen);
+    save();
+    juce::String err;
+    rebuild (err);
+    if (onChanged)
+        onChanged();
+    return true;
 }
 
 bool Project::removeTrack (int track)
@@ -433,7 +558,7 @@ bool Project::setBacking (const juce::File& file, juce::String& error)
     std::unique_ptr<juce::AudioFormatReader> reader (formats.createReaderFor (file));
     if (reader == nullptr)
     {
-        error = "Formato de áudio não suportado: " + file.getFileName();
+        error = juce::String::fromUTF8 ("Formato de áudio não suportado: ") + file.getFileName();
         return false;
     }
     stop();
@@ -467,7 +592,7 @@ bool Project::exportMix (const juce::File& out, juce::String& error, float* peak
     const auto total = lengthOf (*g);
     if (total <= 0)
     {
-        error = "Não há nada gravado para exportar.";
+        error = juce::String::fromUTF8 ("Não há nada gravado para exportar.");
         return false;
     }
     error.clear();
@@ -481,14 +606,14 @@ bool Project::exportMix (const juce::File& out, juce::String& error, float* peak
     std::unique_ptr<juce::OutputStream> stream = std::make_unique<juce::FileOutputStream> (out);
     if (static_cast<juce::FileOutputStream*> (stream.get())->failedToOpen())
     {
-        error = "Não foi possível criar " + out.getFullPathName();
+        error = juce::String::fromUTF8 ("Não foi possível criar ") + out.getFullPathName();
         return false;
     }
     juce::WavAudioFormat wav;
     auto writer = wav.createWriterFor (stream, juce::AudioFormatWriterOptions{}.withSampleRate (rate).withNumChannels (2).withBitsPerSample (24));
     if (writer == nullptr)
     {
-        error = "Não foi possível gravar WAV em " + out.getFullPathName();
+        error = juce::String::fromUTF8 ("Não foi possível gravar WAV em ") + out.getFullPathName();
         return false;
     }
 

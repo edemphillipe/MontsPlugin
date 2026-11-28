@@ -41,7 +41,10 @@ Estúdio de guitarra **standalone** (não precisa de DAW) para **macOS** e **Win
 | Exportar mix em WAV estéreo 24 bits | Pronto | Teste comparando o arquivo com a reprodução; exportado também pela tela |
 | Projetos de gravação em Documentos/Guitar Studio Pro/Gravações (abre o último ao iniciar) | Pronto | Teste: fechar e reabrir o projeto mantém as faixas |
 | Tela de gravação: formas de onda, régua de tempo, clique para posicionar, barra de espaço toca/pausa, R grava | Pronto | Conferida em capturas de tela com um projeto de exemplo. Tocar e gravar com áudio de verdade precisa do seu teste (esta máquina não tem interface de áudio) |
-| Projetos de gravação, instaladores assinados | Fase 4 | |
+| Histórico de takes: regravar por cima ou fazer reamp guarda o take anterior; o botão **Takes** da faixa volta para qualquer take anterior (nenhum arquivo é apagado) | Pronto | Teste: gravar, regravar, reamp, voltar ao primeiro take (toca na posição e no volume certos), fechar e reabrir mantém tudo |
+| Cada take guarda o timbre completo usado (pedais, amp, gabinete, captura, IR, EQ); **Takes → Carregar o timbre** põe esse som de volta na pedaleira | Pronto | Teste: o timbre salvo em cada take é o que estava em uso ao gravar ou fazer o reamp, e sobrevive ao reabrir. Carregar pela tela precisa do seu teste |
+| Renomear projeto e apagar projeto (vai para a lixeira, dá para recuperar) | Pronto | Teste: renomear com o projeto tocando, nome repetido recusado, apagar move a pasta para a lixeira |
+| Instaladores: **.dmg** no Mac e **Setup.exe** no Windows (menu Iniciar, atalho, desinstalador), mais versão portátil .zip | Pronto, sem assinatura | Gerados pelo CI. Ainda sem assinatura: o macOS pede "Abrir mesmo assim" e o Windows mostra o SmartScreen. O CI já assina sozinho quando os certificados forem cadastrados ([docs/ASSINATURA.md](docs/ASSINATURA.md)). Instalar no seu Mac e Windows precisa do seu teste |
 
 ## Baixar e instalar
 

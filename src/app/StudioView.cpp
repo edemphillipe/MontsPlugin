@@ -41,6 +41,19 @@ void setupToggle (juce::TextButton& b, juce::Colour on)
 }
 } // namespace
 
+namespace
+{
+// type straight into the name field of a dialog (the old name is selected)
+void focusText (juce::AlertWindow& w)
+{
+    if (auto* ed = w.getTextEditor ("name"))
+    {
+        ed->grabKeyboardFocus();
+        ed->selectAll();
+    }
+}
+} // namespace
+
 // ================================================================ TrackHeader
 TrackHeader::TrackHeader()
 {
@@ -58,7 +71,8 @@ TrackHeader::TrackHeader()
     solo.setTooltip ("Solo");
     reamp.setTooltip (utf8 ("Reamp: toca a gravação limpa desta faixa pelo amp e pedais atuais e grava o novo som"));
     remove.setTooltip ("Apagar a faixa do projeto (os arquivos ficam na pasta Takes)");
-    for (auto* b : { &arm, &mute, &solo, &reamp, &remove })
+    takes.setTooltip (utf8 ("Takes desta faixa: voltar para uma gravação anterior ou carregar o timbre usado nela"));
+    for (auto* b : { &arm, &mute, &solo, &reamp, &remove, &takes })
         addAndMakeVisible (b);
 
     setupSmallSlider (volume, -60.0, 6.0, 0.0, " dB");
@@ -96,6 +110,8 @@ void TrackHeader::resized()
     row1.removeFromRight (2);
     arm.setBounds (row1.removeFromRight (24));
     row1.removeFromRight (4);
+    takes.setBounds (row1.removeFromRight (56));
+    row1.removeFromRight (4);
     name.setBounds (row1);
     auto row2 = r.removeFromBottom (18);
     row2.removeFromLeft (24);
@@ -118,8 +134,8 @@ StudioView::StudioView (StudioEngine& e, studio::Project& p, juce::PropertiesFil
             openProject (projectsRoot().getChildFile (projectSelect.getText()));
     };
     newProjectButton.onClick = [this] { newProject(); };
-    showFolderButton.onClick = [this] { if (project.isOpen()) project.getFolder().revealToUser(); };
-    showFolderButton.setTooltip ("Mostrar a pasta do projeto (as gravações ficam em Takes)");
+    projectMenuButton.onClick = [this] { showProjectMenu(); };
+    projectMenuButton.setTooltip (utf8 ("Renomear, apagar ou abrir a pasta do projeto"));
 
     toStartButton.setTooltip (utf8 ("Voltar ao início"));
     toStartButton.onClick = [this] { project.seek (0); repaint(); };
@@ -165,7 +181,7 @@ StudioView::StudioView (StudioEngine& e, studio::Project& p, juce::PropertiesFil
     noticeLabel.setFont (juce::FontOptions (12.0f));
 
     for (juce::Component* c : std::initializer_list<juce::Component*> {
-             &projectSelect, &newProjectButton, &showFolderButton, &toStartButton, &playButton, &stopButton, &recordButton,
+             &projectSelect, &newProjectButton, &projectMenuButton, &toStartButton, &playButton, &stopButton, &recordButton,
              &timeLabel, &clickToggle, &clickVolume, &exportButton, &refButton, &refRemove, &refName, &refVolume, &refMute, &noticeLabel })
         addAndMakeVisible (c);
 
@@ -246,6 +262,132 @@ void StudioView::newProject()
             return;
         openProject (projectsRoot().getChildFile (name));
     }), true);
+    focusText (*w);
+}
+
+void StudioView::showProjectMenu()
+{
+    if (! project.isOpen())
+        return;
+    juce::PopupMenu m;
+    m.addItem (1, "Renomear projeto...");
+    m.addItem (2, "Abrir a pasta do projeto");
+    m.addSeparator();
+    m.addItem (3, utf8 ("Apagar projeto (vai para a lixeira)..."));
+    m.showMenuAsync (juce::PopupMenu::Options().withTargetComponent (projectMenuButton), [this] (int r)
+    {
+        if (r == 1) renameProject();
+        if (r == 2) project.getFolder().revealToUser();
+        if (r == 3) deleteProject();
+    });
+}
+
+void StudioView::renameProject()
+{
+    auto* w = new juce::AlertWindow ("Renomear projeto", "Novo nome do projeto:", juce::MessageBoxIconType::NoIcon);
+    w->addTextEditor ("name", project.getFolder().getFileName());
+    w->addButton ("Renomear", 1, juce::KeyPress (juce::KeyPress::returnKey));
+    w->addButton ("Cancelar", 0, juce::KeyPress (juce::KeyPress::escapeKey));
+    const auto oldName = project.getFolder().getFileName();
+    w->enterModalState (true, juce::ModalCallbackFunction::create ([this, w, oldName] (int result)
+    {
+        if (result != 1 || w->getTextEditorContents ("name").trim() == oldName)
+            return;
+        juce::String err;
+        reampingTrack = -1;
+        const bool ok = project.rename (w->getTextEditorContents ("name"), err);
+        if (project.isOpen())
+            settings.setValue ("studioProject", project.getFolder().getFullPathName());
+        refreshProjectList();
+        refresh();
+        if (ok)
+            notify (utf8 ("Projeto renomeado para \"") + project.getFolder().getFileName() + "\".");
+        else
+            notify (err, true);
+    }), true);
+    focusText (*w);
+}
+
+void StudioView::deleteProject()
+{
+    const auto name = project.getFolder().getFileName();
+    const auto options = juce::MessageBoxOptions{}.withIconType (juce::MessageBoxIconType::WarningIcon)
+        .withTitle ("Apagar projeto")
+        .withMessage (utf8 ("Mover o projeto \"") + name + utf8 ("\" para a lixeira? Todas as gravações dele vão junto (dá para recuperar pela lixeira)."))
+        .withButton ("Apagar", 1).withButton ("Cancelar", 0).withAssociatedComponent (this);
+    juce::AlertWindow::showAsync (options, [this, name] (int ok)
+    {
+        if (ok != 1)
+            return;
+        juce::String err;
+        reampingTrack = -1;
+        armed = -1;
+        if (! project.moveToTrash (err))
+        {
+            notify (err, true);
+            return;
+        }
+        auto dirs = projectsRoot().findChildFiles (juce::File::findDirectories, false);
+        dirs.sort();
+        openProject (dirs.isEmpty() ? projectsRoot().getChildFile ("Projeto 1") : dirs[0]);
+        notify (utf8 ("Projeto \"") + name + utf8 ("\" foi para a lixeira."));
+    });
+}
+
+void StudioView::showTakesMenu (int track)
+{
+    if (track < 0 || track >= (int) project.session().tracks.size())
+        return;
+    const auto& t = project.session().tracks[(size_t) track];
+    auto labelOf = [] (const studio::TakeInfo& k)
+    {
+        if (k.label.isNotEmpty())
+            return k.label;
+        return juce::File (k.wetFile).getFileNameWithoutExtension().upToFirstOccurrenceOf ("_", false, false);
+    };
+    const auto cur = t.current();
+    juce::PopupMenu m;
+    m.addSectionHeader ("Take em uso: " + labelOf (cur));
+    m.addItem (1, utf8 ("Carregar o timbre deste take na pedaleira"), cur.tone.isObject());
+    if (! cur.tone.isObject())
+        m.addItem (-1, utf8 ("(take gravado antes desta versão: sem timbre salvo)"), false);
+    if (! t.history.empty())
+    {
+        m.addSeparator();
+        m.addSectionHeader ("Takes anteriores");
+        for (int k = (int) t.history.size() - 1; k >= 0; --k) // newest first
+        {
+            const auto& h = t.history[(size_t) k];
+            juce::PopupMenu sub;
+            sub.addItem (1000 + k, "Usar este take");
+            sub.addItem (2000 + k, "Carregar o timbre dele na pedaleira", h.tone.isObject());
+            m.addSubMenu (labelOf (h), sub);
+        }
+    }
+    m.showMenuAsync (juce::PopupMenu::Options().withTargetComponent (headers[track]->takes), [this, track] (int r)
+    {
+        if (track >= (int) project.session().tracks.size())
+            return;
+        const auto& tr = project.session().tracks[(size_t) track];
+        auto loadTone = [this] (const juce::var& tone, const juce::String& what)
+        {
+            if (onLoadTone != nullptr && tone.isObject())
+            {
+                onLoadTone (tone);
+                notify (utf8 ("Timbre de \"") + what + utf8 ("\" carregado na pedaleira."));
+            }
+        };
+        if (r == 1)
+            loadTone (tr.tone, tr.takeLabel.isNotEmpty() ? tr.takeLabel : tr.name);
+        else if (r >= 2000 && r - 2000 < (int) tr.history.size())
+            loadTone (tr.history[(size_t) (r - 2000)].tone, tr.history[(size_t) (r - 2000)].label);
+        else if (r >= 1000 && r - 1000 < (int) tr.history.size())
+        {
+            reampingTrack = -1;
+            project.useTake (track, r - 1000);
+            notify (utf8 ("Take trocado na ") + project.session().tracks[(size_t) track].name + utf8 (". O anterior continua na lista de takes."));
+        }
+    });
 }
 
 void StudioView::refresh()
@@ -271,6 +413,8 @@ void StudioView::refresh()
         h->arm.setToggleState (armed == i, juce::dontSendNotification);
         h->selected = armed == i;
         h->reamp.setEnabled (t.diFile.isNotEmpty());
+        h->takes.setButtonText (t.history.empty() ? "Takes" : "Takes " + juce::String ((int) t.history.size() + 1));
+        h->takes.onClick = [this, i] { showTakesMenu (i); };
 
         h->name.onTextChange = [this, i, h]
         {
@@ -518,7 +662,7 @@ void StudioView::resized()
     top.removeFromLeft (4);
     newProjectButton.setBounds (top.removeFromLeft (100));
     top.removeFromLeft (4);
-    showFolderButton.setBounds (top.removeFromLeft (86));
+    projectMenuButton.setBounds (top.removeFromLeft (86));
     top.removeFromLeft (20);
     toStartButton.setBounds (top.removeFromLeft (36));
     top.removeFromLeft (4);
