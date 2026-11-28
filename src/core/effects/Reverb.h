@@ -50,7 +50,7 @@ private:
     bool tailWhenBypassed() const noexcept override { return true; }
     void configure (int mode) noexcept;
 
-    int pMode, pDecay, pPreDelay, pTone, pMix, pMod, pParam;
+    int pMode, pDecay, pPreDelay, pTone, pMix, pMod, pParam, pHiDamp, pLowDamp;
 
     DelayLine preDelay;
     Allpass diffL[numDiffusers], diffR[numDiffusers];
@@ -64,6 +64,7 @@ private:
     float state[numLines] {};
     OctaveUp shimmerL, shimmerR;
     OnePole shimmerLp;
+    OnePole tiltL, tiltR; // TONE: tilt EQ on the reverb sound
     float shimmerFbL = 0.0f, shimmerFbR = 0.0f;
 
     // per-mode voicing

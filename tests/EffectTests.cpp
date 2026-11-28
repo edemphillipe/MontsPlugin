@@ -405,12 +405,14 @@ void testDrives()
 // energy of x in a band around f (2nd-order band-pass), dB
 double bandDb (const std::vector<float>& x, double f)
 {
-    juce::dsp::IIR::Filter<float> bp;
+    // two band-passes in series: steep enough that a loud neighbouring band doesn't leak in
+    juce::dsp::IIR::Filter<float> bp, bp2;
     bp.coefficients = juce::dsp::IIR::Coefficients<float>::makeBandPass (fs, f, 1.4);
+    bp2.coefficients = juce::dsp::IIR::Coefficients<float>::makeBandPass (fs, f, 1.4);
     double e = 0.0;
     for (size_t i = 0; i < x.size(); ++i)
     {
-        const float y = bp.processSample (x[i]);
+        const float y = bp2.processSample (bp.processSample (x[i]));
         if (i > x.size() / 4)
             e += (double) y * y;
     }
@@ -446,6 +448,44 @@ void testCrunchToneStack()
     const double change = 20.0 * std::log10 (rms (out) / rms (in));
     std::printf ("  CRUNCH default level vs. dry guitar: %+.1f dB\n", change);
     CHECK (std::abs (change) < 6.0 && allFinite (out), "level jump %.1f dB", change);
+}
+
+
+void testReverbDamping()
+{
+    // white-ish noise burst into the Cloud reverb, measure the tail by band
+    auto tail = [] (float hi, float lo, float tone)
+    {
+        gsp::fx::Reverb rv;
+        rv.enabled = true;
+        rv.set ("mode", 5.0f); // Cloud
+        rv.set ("decay", 4.0f);
+        rv.set ("mix", 1.0f);
+        rv.set ("hidamp", hi);
+        rv.set ("lowdamp", lo);
+        rv.set ("tone", tone);
+        rv.prepare (fs, block);
+        std::mt19937 rng (5);
+        std::uniform_real_distribution<float> u (-0.5f, 0.5f);
+        std::vector<float> in ((size_t) fs * 3, 0.0f);
+        for (size_t i = 0; i < (size_t) fs / 4; ++i)
+            in[i] = u (rng);
+        auto out = run (rv, in).l;
+        // keep only the tail (0.75 s .. 3 s)
+        return std::vector<float> (out.begin() + (long) (fs * 0.75), out.end());
+    };
+    const auto base = tail (0.5f, 0.4f, 0.5f);
+    const auto noHiDamp = tail (0.0f, 0.4f, 0.5f), fullHiDamp = tail (1.0f, 0.4f, 0.5f);
+    const auto noLowDamp = tail (0.5f, 0.0f, 0.5f), fullLowDamp = tail (0.5f, 1.0f, 0.5f);
+    const auto bright = tail (0.5f, 0.4f, 1.0f), dark = tail (0.5f, 0.4f, 0.0f);
+    const double hi = bandDb (noHiDamp, 5000.0) - bandDb (fullHiDamp, 5000.0);
+    const double lo = bandDb (noLowDamp, 120.0) - bandDb (fullLowDamp, 120.0);
+    const double tn = (bandDb (bright, 5000.0) - bandDb (bright, 200.0)) - (bandDb (dark, 5000.0) - bandDb (dark, 200.0));
+    std::printf ("  Cloud tail: HI DAMP 0->1 removes %.1f dB @5 kHz; LOW DAMP 0->1 removes %.1f dB @120 Hz; TONE 0->1 tilts %+.1f dB (5 kHz vs 200 Hz)\n", hi, lo, tn);
+    CHECK (hi > 10.0, "HI DAMP too weak (%.1f dB)", hi);
+    CHECK (lo > 6.0, "LOW DAMP too weak (%.1f dB)", lo);
+    CHECK (tn > 10.0, "TONE too weak (%.1f dB)", tn);
+    CHECK (allFinite (base) && allFinite (noHiDamp) && allFinite (bright), "NaN");
 }
 
 void testCompressor()
@@ -714,6 +754,7 @@ void runEffectTests()
     runTest ("Reverb: tail keeps ringing when switched off", testReverbTailWhenBypassed);
     runTest ("Drives: gain adds distortion, low aliasing", testDrives);
     runTest ("Drives: CRUNCH bass/middle/treble and level", testCrunchToneStack);
+    runTest ("Reverb: HI DAMP, LOW DAMP and TONE", testReverbDamping);
     runTest ("Compressor reduces dynamics", testCompressor);
     runTest ("Tremolo follows TAP tempo", testTremoloSync);
     runTest ("TAP tempo", testTapTempo);

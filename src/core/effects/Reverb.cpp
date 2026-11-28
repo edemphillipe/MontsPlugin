@@ -24,6 +24,8 @@ Reverb::Reverb() : Effect ("reverb", "Reverb", Placement::PostAmp)
     pMix      = addParam ({ "mix", "MIX", 0.0f, 1.0f, 0.3f, "" });
     pMod      = addParam ({ "mod", "MOD", 0.0f, 1.0f, 0.4f, "" });
     pParam    = addParam ({ "param", "SHIMMER", 0.0f, 1.0f, 0.4f, "" }); // shimmer amount / spring drip / cloud density
+    pHiDamp   = addParam ({ "hidamp", "HI DAMP", 0.0f, 1.0f, 0.5f, "" });   // how fast the highs die out
+    pLowDamp  = addParam ({ "lowdamp", "LOW DAMP", 0.0f, 1.0f, 0.4f, "" }); // how fast the lows die out
 }
 
 float Reverb::OctaveUp::process (float x) noexcept
@@ -76,6 +78,8 @@ void Reverb::resetEffect()
     for (auto& a : diffR) a.line.clear();
     for (auto& a : spring) a.line.clear();
     for (int i = 0; i < numLines; ++i) { lines[i].clear(); damp[i].reset(); lowCut[i].reset(); state[i] = 0.0f; }
+    tiltL.reset();
+    tiltR.reset();
     shimmerL.line.clear(); shimmerR.line.clear();
     shimmerFbL = shimmerFbR = 0.0f;
 }
@@ -110,7 +114,6 @@ void Reverb::configure (int mode) noexcept
     for (int i = 0; i < numLines; ++i)
     {
         lineLen[i] = std::min (baseLen[i] * sizeScale, (float) lines[i].capacity() - modDepth * 2.0f - 8.0f);
-        lowCut[i].setLowpass (fs, lowDampHz);
     }
 }
 
@@ -127,6 +130,18 @@ void Reverb::processEffect (float* l, float* r, int n, bool inputMuted) noexcept
 
     const float t60 = get (pDecay) * decayScale;
     const float tone = get (pTone);
+    const float hiDamp = get (pHiDamp), lowDamp = get (pLowDamp);
+    // HI DAMP: in-loop low-pass around the mode's own value (x2.8 brighter .. x0.35 darker)
+    const double hiCut = std::min (0.45 * fs, (double) highDamp * std::pow (2.0, 3.0 * (0.5 - hiDamp)));
+    // LOW DAMP: how much of the low end is taken out on every pass, and up to which frequency
+    const float lowAmount = 0.15f + 0.8f * lowDamp;
+    const double lowCutHz = lowDampHz * (1.0 + 5.0 * lowDamp);
+    // TONE: tilt around 1 kHz on the reverb sound, -8..+10 dB highs / +4..-4 dB lows
+    const float tilt = 2.0f * (tone - 0.5f);
+    const float highGain = std::pow (10.0f, (tilt >= 0.0f ? 10.0f : 8.0f) * tilt / 20.0f);
+    const float lowGain = std::pow (10.0f, -4.0f * tilt / 20.0f);
+    tiltL.setLowpass (fs, 1000.0);
+    tiltR.setLowpass (fs, 1000.0);
     const float mix = get (pMix);
     const float modAmt = get (pMod) * modDepth * (float) fs / 48000.0f;
     const float param = get (pParam);
@@ -136,7 +151,8 @@ void Reverb::processEffect (float* l, float* r, int n, bool inputMuted) noexcept
     for (int i = 0; i < numLines; ++i)
     {
         gains[i] = std::pow (10.0f, -3.0f * (lineLen[i] / (float) fs) / std::max (0.05f, t60));
-        damp[i].setLowpass (fs, highDamp * (0.25 + 1.5 * tone));
+        damp[i].setLowpass (fs, hiCut);
+        lowCut[i].setLowpass (fs, lowCutHz);
     }
     shimmerLp.setLowpass (fs, 7000.0);
     const float shimmerAmount = mode == Shimmer ? 0.55f * param : 0.0f;
@@ -182,7 +198,7 @@ void Reverb::processEffect (float* l, float* r, int n, bool inputMuted) noexcept
         {
             float v = out[i] - k;
             v = damp[i].lp (v);
-            v = v - lowCut[i].lp (v) * 0.6f;               // gentle low-frequency damping
+            v = v - lowCut[i].lp (v) * lowAmount;          // low-frequency damping
             const float input = (i % 2 == 0) ? xl : xr;
             lines[i].push (input * 0.6f + v * gains[i]);
         }
@@ -192,6 +208,7 @@ void Reverb::processEffect (float* l, float* r, int n, bool inputMuted) noexcept
         float wetR = out[1] + out[3] + out[5] + out[7] - 0.5f * (out[2] + out[6]);
         wetL *= 0.35f;
         wetR *= 0.35f;
+
         if (earlyGain > 0.0f)
         {
             wetL += earlyGain * xl * 0.5f;
@@ -208,6 +225,11 @@ void Reverb::processEffect (float* l, float* r, int n, bool inputMuted) noexcept
         {
             shimmerFbL = shimmerFbR = 0.0f;
         }
+
+        // TONE on what you hear (the shimmer loop above uses the untilted sound, so it stays stable)
+        const float lowL = tiltL.lp (wetL), lowR = tiltR.lp (wetR);
+        wetL = lowL * lowGain + (wetL - lowL) * highGain;
+        wetR = lowR * lowGain + (wetR - lowR) * highGain;
 
         if (inputMuted)
         {
