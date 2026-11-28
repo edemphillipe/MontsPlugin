@@ -34,7 +34,7 @@ PedalStyle styleFor (const std::string& t)
     if (t == "compressor")      set ("SQUEEZE", "COMPRESSOR", 0xff2f6f73, 0xffffffff, { "sustain", "attack", "level" }, "silver");
     else if (t == "boost")      set ("LIFT", "BOOST", 0xffb8bcc4, 0xff1b1c21, { "gain", "bright" }, "black", 150);
     else if (t == "overdrive")  set ("SUNDRIVE", "OVERDRIVE", 0xffd9a52a, 0xff1d1606, { "drive", "tone", "level" }, "cream");
-    else if (t == "distortion") set ("CRUNCH", "DISTORTION", 0xffc2452d, 0xffffffff, { "gain", "tone", "level" }, "black");
+    else if (t == "distortion") set ("CRUNCH", "DISTORTION", 0xffc2452d, 0xffffffff, { "gain", "bass", "middle", "treble", "level" }, "black", 270);
     else if (t == "fuzz")       set ("BUZZ", "FUZZ", 0xff6b3fa0, 0xffffffff, { "fuzz", "tone", "level" }, "silver");
     else if (t == "chorus")     set ("CHORUS 2", "CHORUS", 0xff3d93d0, 0xffffffff, { "rate", "depth", "mix" }, "cream");
     else if (t == "flanger")    set ("JETSTREAM", "FLANGER", 0xff7a8a99, 0xffffffff, { "rate", "depth", "regen" }, "black");

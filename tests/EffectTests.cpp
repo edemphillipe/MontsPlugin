@@ -401,6 +401,53 @@ void testDrives()
     }
 }
 
+
+// energy of x in a band around f (2nd-order band-pass), dB
+double bandDb (const std::vector<float>& x, double f)
+{
+    juce::dsp::IIR::Filter<float> bp;
+    bp.coefficients = juce::dsp::IIR::Coefficients<float>::makeBandPass (fs, f, 1.4);
+    double e = 0.0;
+    for (size_t i = 0; i < x.size(); ++i)
+    {
+        const float y = bp.processSample (x[i]);
+        if (i > x.size() / 4)
+            e += (double) y * y;
+    }
+    return 10.0 * std::log10 (e / (double) x.size() + 1e-20);
+}
+
+void testCrunchToneStack()
+{
+    auto d = make<gsp::fx::Distortion>();
+    d->enabled = true;
+    const auto in = gsptest::guitarLikeSignal ((int) fs, fs);
+    auto with = [&] (const char* knob, float v)
+    {
+        for (const char* k : { "bass", "middle", "treble" })
+            d->set (k, 0.5f);
+        d->set (knob, v);
+        d->reset();
+        return run (*d, in).l;
+    };
+    const double bassLo = bandDb (with ("bass", 0.0f), 100.0), bassHi = bandDb (with ("bass", 1.0f), 100.0);
+    const double midLo = bandDb (with ("middle", 0.0f), 600.0), midHi = bandDb (with ("middle", 1.0f), 600.0);
+    const double trebLo = bandDb (with ("treble", 0.0f), 3000.0), trebHi = bandDb (with ("treble", 1.0f), 3000.0);
+    std::printf ("  CRUNCH tone stack: BASS %+.1f dB @100 Hz, MIDDLE %+.1f dB @600 Hz, TREBLE %+.1f dB @3 kHz\n",
+                 bassHi - bassLo, midHi - midLo, trebHi - trebLo);
+    // British-style passive stack: a wide treble/bass range and a gentler middle (like the amps' stack)
+    CHECK (bassHi - bassLo > 4.0 && midHi - midLo > 2.0 && trebHi - trebLo > 5.0, "tone knobs too weak");
+
+    // default settings: in the same loudness ballpark as the guitar (no big jump when switching on)
+    for (int i = 0; i < (int) d->getParams().size(); ++i)
+        d->set (i, d->getParams()[(size_t) i].def);
+    d->reset();
+    const auto out = run (*d, in).l;
+    const double change = 20.0 * std::log10 (rms (out) / rms (in));
+    std::printf ("  CRUNCH default level vs. dry guitar: %+.1f dB\n", change);
+    CHECK (std::abs (change) < 6.0 && allFinite (out), "level jump %.1f dB", change);
+}
+
 void testCompressor()
 {
     auto c = make<gsp::fx::Compressor>();
@@ -626,6 +673,7 @@ void runEffectTests()
     runTest ("Reverb: shimmer cannot run away", testShimmerStable);
     runTest ("Reverb: tail keeps ringing when switched off", testReverbTailWhenBypassed);
     runTest ("Drives: gain adds distortion, low aliasing", testDrives);
+    runTest ("Drives: CRUNCH bass/middle/treble and level", testCrunchToneStack);
     runTest ("Compressor reduces dynamics", testCompressor);
     runTest ("Tremolo follows TAP tempo", testTremoloSync);
     runTest ("TAP tempo", testTapTempo);
