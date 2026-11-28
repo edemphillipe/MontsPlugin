@@ -1,5 +1,7 @@
 #pragma once
 
+#include <map>
+
 // Visual pedalboard in the realistic style: painted metal enclosures with knurled knobs,
 // chrome footswitches, LEDs, side jacks and patch cables between pedals, plus a small amp
 // head for the AMP slot.
@@ -62,6 +64,7 @@ public:
     void refreshFromEffect();     // after a preset load or an edit in the pop-up
     int getPedalIndex() const noexcept { return pedalIndex; }
     int preferredWidth() const noexcept { return style.width; }
+    bool isOnBoard() const noexcept { return fx.onBoard.load(); }
 
     void paint (juce::Graphics&) override;
     void resized() override;
@@ -149,9 +152,11 @@ private:
     };
 
     void layoutStrip();
+    void showPedalPicker();
+    std::vector<int> visibleOrder() const; // order without the pedals taken off the board
     void dragMoved (juce::Component& c, const juce::MouseEvent& e);
     void dragEnded (int slot, juce::Component& c, const juce::MouseEvent& e);
-    int dropPositionFor (int xInStrip) const;
+    int dropPositionFor (juce::Point<int> inStrip) const;
     juce::Component* componentForSlot (int slot);
     std::pair<juce::Point<float>, juce::Point<float>> jacksFor (int slot); // input, output in strip coords
 
@@ -159,9 +164,10 @@ private:
     std::vector<std::unique_ptr<PedalComponent>> pedals;
     AmpTile amp;
     Strip strip { *this };
-    juce::Viewport viewport;
     juce::Label title, hint;
-    int dropMarkerX = -1;
+    juce::TextButton chooseButton { juce::String::fromUTF8 ("Escolher pedais...") };
+    juce::Rectangle<int> dropMarker;
+    std::map<int, int> rowOf; // slot -> row (0 or 1)
 };
 
 } // namespace gsp::ui

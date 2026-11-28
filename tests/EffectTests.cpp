@@ -488,6 +488,26 @@ void testReverbDamping()
     CHECK (allFinite (base) && allFinite (noHiDamp) && allFinite (bright), "NaN");
 }
 
+
+void testPedalsOffTheBoard()
+{
+    gsp::Pedalboard board;
+    const int flanger = board.indexOfType ("flanger");
+    board.pedal (flanger).enabled = true;
+    board.setOnBoard (flanger, false);
+    CHECK (! board.pedal (flanger).onBoard.load() && ! board.pedal (flanger).enabled.load(), "taken off the board = switched off");
+    const auto saved = juce::JSON::parse (juce::JSON::toString (board.toVar()));
+    gsp::Pedalboard restored;
+    restored.fromVar (saved);
+    CHECK (! restored.pedal (flanger).onBoard.load() && restored.pedal (restored.indexOfType ("reverb")).onBoard.load(), "saved and restored");
+    // presets saved before this option existed: every pedal stays on the board
+    auto* old = saved.getDynamicObject()->getProperty ("pedals").getDynamicObject()->getProperty ("flanger").getDynamicObject();
+    old->removeProperty ("onBoard");
+    gsp::Pedalboard fromOld;
+    fromOld.fromVar (saved);
+    CHECK (fromOld.pedal (flanger).onBoard.load(), "old preset");
+}
+
 void testCompressor()
 {
     auto c = make<gsp::fx::Compressor>();
@@ -747,6 +767,7 @@ void runEffectTests()
     runTest ("Delay: time and TAP sync", testDelayTiming);
     runTest ("Dual delay: independent L/R time, tone, cross, stability", testDualDelay);
     runTest ("Dual delay: LINK repeats and level", testDualDelayLink);
+    runTest ("Pedalboard: pedals taken off the board", testPedalsOffTheBoard);
     runTest ("Delay: ping pong alternates sides", testPingPong);
     runTest ("Delay: reverse", testReverseDelay);
     runTest ("Reverb: decay time and stereo", testReverbDecay);

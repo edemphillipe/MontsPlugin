@@ -113,6 +113,8 @@ public:
     }
 
     std::atomic<bool> enabled { true };
+    // shown on the pedalboard (a pedal taken off the board is also switched off)
+    std::atomic<bool> onBoard { true };
 
     void setTempoClock (const TempoClock* c) noexcept { tempo = c; }
 

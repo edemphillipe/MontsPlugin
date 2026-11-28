@@ -96,6 +96,16 @@ void Pedalboard::movePedal (int pedalIndex, int newPosition)
     setOrder (order);
 }
 
+void Pedalboard::setOnBoard (int pedalIndex, bool on)
+{
+    if (pedalIndex < 0 || pedalIndex >= size())
+        return;
+    auto& p = *pedals[(size_t) pedalIndex];
+    p.onBoard = on;
+    if (! on)
+        p.enabled = false;
+}
+
 void Pedalboard::prepare (double sampleRate, int maxBlock)
 {
     for (auto& p : pedals)
@@ -117,6 +127,7 @@ juce::var Pedalboard::toVar() const
     {
         auto* po = new juce::DynamicObject();
         po->setProperty ("enabled", p->enabled.load());
+        po->setProperty ("onBoard", p->onBoard.load());
         auto* params = new juce::DynamicObject();
         for (int i = 0; i < p->numParams(); ++i)
             params->setProperty (juce::Identifier (p->getParams()[(size_t) i].id), p->get (i));
@@ -142,7 +153,8 @@ void Pedalboard::fromVar (const juce::var& v)
             const auto pv = pedalsObj->getProperty (juce::Identifier (p->getTypeId()));
             if (! pv.isObject())
                 continue;
-            p->enabled = (bool) pv["enabled"];
+            p->onBoard = pv.hasProperty ("onBoard") ? (bool) pv["onBoard"] : true;
+            p->enabled = (bool) pv["enabled"] && p->onBoard.load();
             if (auto* params = pv["params"].getDynamicObject())
                 for (int i = 0; i < p->numParams(); ++i)
                 {

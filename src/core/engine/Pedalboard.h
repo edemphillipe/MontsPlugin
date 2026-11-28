@@ -37,6 +37,7 @@ public:
     const std::vector<int>& defaultOrder() const noexcept { return defaults; }
     void setOrder (const std::vector<int>& newOrder); // UI thread; invalid orders are ignored
     void movePedal (int pedalIndex, int newPosition);  // UI helper (position in the order list)
+    void setOnBoard (int pedalIndex, bool on);         // take a pedal off the board (and switch it off) or put it back
 
     // State for presets / settings (JSON)
     juce::var toVar() const;
